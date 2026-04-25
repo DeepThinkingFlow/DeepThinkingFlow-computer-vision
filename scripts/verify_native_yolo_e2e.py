@@ -8,12 +8,11 @@ import cv2
 import dtflowcv_native
 import numpy as np
 import torch
-from PIL import Image, ImageDraw
-from ultralytics import YOLO
-
 from dtflowcv.config import load_yaml
 from dtflowcv.specs import class_names
 from dtflowcv.yolo import parse_yolo_label_file, yolo_to_xyxy
+from PIL import Image, ImageDraw
+from ultralytics import YOLO
 
 
 def main() -> None:

@@ -1,12 +1,11 @@
 from pathlib import Path
 
 import pytest
-from PIL import Image
-
 from dtflowcv.dataset import audit_dataset
 from dtflowcv.errors import export_detection_errors
 from dtflowcv.evaluate import evaluate_yolo_predictions
 from dtflowcv.yolo import parse_yolo_label_file, related_label_path
+from PIL import Image
 
 
 def test_yolo_parser_rejects_extra_columns(tmp_path: Path) -> None:

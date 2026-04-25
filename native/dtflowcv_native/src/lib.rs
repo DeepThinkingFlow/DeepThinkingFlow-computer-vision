@@ -1,7 +1,6 @@
 use numpy::{PyArray1, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use std::collections::BTreeMap;
-use std::ffi::CStr;
 
 /* ── C FFI declarations ──────────────────────────────────── */
 
@@ -114,6 +113,10 @@ fn c_buf_to_string(buf: &[u8]) -> String {
     String::from_utf8_lossy(&buf[..nul_pos]).trim().to_string()
 }
 
+fn py_bool(py: Python<'_>, value: bool) -> Py<PyAny> {
+    value.into_pyobject(py).unwrap().to_owned().into_any().unbind()
+}
+
 /* ── Python-exposed functions ────────────────────────────── */
 
 #[pyfunction]
@@ -168,14 +171,12 @@ fn normalize_hwc_u8_to_chw_f32<'py>(
         let h = height;
         let w = width;
 
-        py.allow_threads(|| {
-            unsafe {
-                dtflowcv_normalize_dispatch(
-                    input_ptr, output_ptr, h, w, 3,
-                    mean_arr.as_ptr(), std_arr.as_ptr(),
-                );
-            }
-        });
+        unsafe {
+            dtflowcv_normalize_dispatch(
+                input_ptr, output_ptr, h, w, 3,
+                mean_arr.as_ptr(), std_arr.as_ptr(),
+            );
+        }
     }
     Ok(output)
 }
@@ -209,9 +210,7 @@ fn box_iou_matrix<'py>(
         let a_ptr = a_slice.as_ptr();
         let b_ptr = b_slice.as_ptr();
         let out_ptr = output_slice.as_mut_ptr();
-        py.allow_threads(|| {
-            unsafe { dtflowcv_box_iou_matrix(a_ptr, n_a, b_ptr, n_b, out_ptr); }
-        });
+        unsafe { dtflowcv_box_iou_matrix(a_ptr, n_a, b_ptr, n_b, out_ptr); }
     }
     Ok(output)
 }
@@ -275,8 +274,8 @@ fn nms_boxes<'py>(
 
 /// Full hardware detection report as a Python dict.
 #[pyfunction]
-fn hardware_info() -> BTreeMap<String, PyObject> {
-    Python::with_gil(|py| {
+fn hardware_info() -> BTreeMap<String, Py<PyAny>> {
+    Python::attach(|py| {
         let mut result = BTreeMap::new();
 
         unsafe {
@@ -284,7 +283,7 @@ fn hardware_info() -> BTreeMap<String, PyObject> {
             let mut cpu = std::mem::zeroed::<CpuInfo>();
             dtflowcv_detect_cpu(&mut cpu);
 
-            let mut cpu_map = BTreeMap::<String, PyObject>::new();
+            let mut cpu_map = BTreeMap::<String, Py<PyAny>>::new();
             cpu_map.insert("arch".into(), c_buf_to_string(&cpu.arch).into_pyobject(py).unwrap().into_any().unbind());
             cpu_map.insert("vendor".into(), c_buf_to_string(&cpu.vendor).into_pyobject(py).unwrap().into_any().unbind());
             cpu_map.insert("brand".into(), c_buf_to_string(&cpu.brand).into_pyobject(py).unwrap().into_any().unbind());
@@ -294,26 +293,26 @@ fn hardware_info() -> BTreeMap<String, PyObject> {
             cpu_map.insert("base_freq_mhz".into(), cpu.base_freq_mhz.into_pyobject(py).unwrap().into_any().unbind());
 
             // SIMD flags
-            let mut simd = BTreeMap::<String, PyObject>::new();
-            simd.insert("sse2".into(), (cpu.has_sse2 != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("sse3".into(), (cpu.has_sse3 != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("ssse3".into(), (cpu.has_ssse3 != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("sse41".into(), (cpu.has_sse41 != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("sse42".into(), (cpu.has_sse42 != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("avx".into(), (cpu.has_avx != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("avx2".into(), (cpu.has_avx2 != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("fma3".into(), (cpu.has_fma3 != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("avx512f".into(), (cpu.has_avx512f != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("avx512bw".into(), (cpu.has_avx512bw != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("avx512vl".into(), (cpu.has_avx512vl != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("neon".into(), (cpu.has_neon != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("sve".into(), (cpu.has_sve != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("sve2".into(), (cpu.has_sve2 != 0).into_pyobject(py).unwrap().into_any().unbind());
-            simd.insert("fp16".into(), (cpu.has_fp16 != 0).into_pyobject(py).unwrap().into_any().unbind());
+            let mut simd = BTreeMap::<String, Py<PyAny>>::new();
+            simd.insert("sse2".into(), py_bool(py, cpu.has_sse2 != 0));
+            simd.insert("sse3".into(), py_bool(py, cpu.has_sse3 != 0));
+            simd.insert("ssse3".into(), py_bool(py, cpu.has_ssse3 != 0));
+            simd.insert("sse41".into(), py_bool(py, cpu.has_sse41 != 0));
+            simd.insert("sse42".into(), py_bool(py, cpu.has_sse42 != 0));
+            simd.insert("avx".into(), py_bool(py, cpu.has_avx != 0));
+            simd.insert("avx2".into(), py_bool(py, cpu.has_avx2 != 0));
+            simd.insert("fma3".into(), py_bool(py, cpu.has_fma3 != 0));
+            simd.insert("avx512f".into(), py_bool(py, cpu.has_avx512f != 0));
+            simd.insert("avx512bw".into(), py_bool(py, cpu.has_avx512bw != 0));
+            simd.insert("avx512vl".into(), py_bool(py, cpu.has_avx512vl != 0));
+            simd.insert("neon".into(), py_bool(py, cpu.has_neon != 0));
+            simd.insert("sve".into(), py_bool(py, cpu.has_sve != 0));
+            simd.insert("sve2".into(), py_bool(py, cpu.has_sve2 != 0));
+            simd.insert("fp16".into(), py_bool(py, cpu.has_fp16 != 0));
             cpu_map.insert("simd".into(), simd.into_pyobject(py).unwrap().into_any().unbind());
 
             // Cache
-            let mut cache = BTreeMap::<String, PyObject>::new();
+            let mut cache = BTreeMap::<String, Py<PyAny>>::new();
             cache.insert("l1d_bytes".into(), cpu.l1d_cache_bytes.into_pyobject(py).unwrap().into_any().unbind());
             cache.insert("l1i_bytes".into(), cpu.l1i_cache_bytes.into_pyobject(py).unwrap().into_any().unbind());
             cache.insert("l2_bytes".into(), cpu.l2_cache_bytes.into_pyobject(py).unwrap().into_any().unbind());
@@ -326,18 +325,18 @@ fn hardware_info() -> BTreeMap<String, PyObject> {
             // Memory
             let mut mem = std::mem::zeroed::<MemInfo>();
             dtflowcv_detect_mem(&mut mem);
-            let mut mem_map = BTreeMap::<String, PyObject>::new();
+            let mut mem_map = BTreeMap::<String, Py<PyAny>>::new();
             mem_map.insert("total_bytes".into(), mem.total_ram_bytes.into_pyobject(py).unwrap().into_any().unbind());
             mem_map.insert("available_bytes".into(), mem.available_ram_bytes.into_pyobject(py).unwrap().into_any().unbind());
             mem_map.insert("page_size".into(), mem.page_size_bytes.into_pyobject(py).unwrap().into_any().unbind());
-            mem_map.insert("huge_pages".into(), (mem.huge_pages_supported != 0).into_pyobject(py).unwrap().into_any().unbind());
+            mem_map.insert("huge_pages".into(), py_bool(py, mem.huge_pages_supported != 0));
             mem_map.insert("huge_page_size".into(), mem.huge_page_size_bytes.into_pyobject(py).unwrap().into_any().unbind());
             result.insert("memory".into(), mem_map.into_pyobject(py).unwrap().into_any().unbind());
 
             // GPU
             let mut gpu = std::mem::zeroed::<GpuInfo>();
             dtflowcv_detect_gpu(&mut gpu);
-            let mut gpu_map = BTreeMap::<String, PyObject>::new();
+            let mut gpu_map = BTreeMap::<String, Py<PyAny>>::new();
             gpu_map.insert("cuda_device_count".into(), gpu.cuda_device_count.into_pyobject(py).unwrap().into_any().unbind());
             gpu_map.insert("cuda_device_name".into(), c_buf_to_string(&gpu.cuda_device_name).into_pyobject(py).unwrap().into_any().unbind());
             gpu_map.insert("cuda_total_mem_bytes".into(), gpu.cuda_total_mem_bytes.into_pyobject(py).unwrap().into_any().unbind());
@@ -346,8 +345,8 @@ fn hardware_info() -> BTreeMap<String, PyObject> {
 
             // OS
             let mut os = std::mem::zeroed::<OsInfo>();
-            dtflowcv_detect_os(&os);
-            let mut os_map = BTreeMap::<String, PyObject>::new();
+            dtflowcv_detect_os(&mut os);
+            let mut os_map = BTreeMap::<String, Py<PyAny>>::new();
             os_map.insert("name".into(), c_buf_to_string(&os.os_name).into_pyobject(py).unwrap().into_any().unbind());
             os_map.insert("release".into(), c_buf_to_string(&os.os_release).into_pyobject(py).unwrap().into_any().unbind());
             os_map.insert("hostname".into(), c_buf_to_string(&os.hostname).into_pyobject(py).unwrap().into_any().unbind());
@@ -356,16 +355,16 @@ fn hardware_info() -> BTreeMap<String, PyObject> {
             // Suitability
             let mut suit = std::mem::zeroed::<Suitability>();
             dtflowcv_check_suitability(&cpu, &mem, &mut suit);
-            let mut suit_map = BTreeMap::<String, PyObject>::new();
+            let mut suit_map = BTreeMap::<String, Py<PyAny>>::new();
             let status_str = match suit.overall_status {
                 0 => "OK",
                 1 => "WARNING",
                 _ => "INSUFFICIENT",
             };
             suit_map.insert("status".into(), status_str.into_pyobject(py).unwrap().into_any().unbind());
-            suit_map.insert("cpu_ok".into(), (suit.cpu_ok != 0).into_pyobject(py).unwrap().into_any().unbind());
-            suit_map.insert("ram_ok".into(), (suit.ram_ok != 0).into_pyobject(py).unwrap().into_any().unbind());
-            suit_map.insert("simd_ok".into(), (suit.simd_ok != 0).into_pyobject(py).unwrap().into_any().unbind());
+            suit_map.insert("cpu_ok".into(), py_bool(py, suit.cpu_ok != 0));
+            suit_map.insert("ram_ok".into(), py_bool(py, suit.ram_ok != 0));
+            suit_map.insert("simd_ok".into(), py_bool(py, suit.simd_ok != 0));
             let mut msgs = Vec::new();
             for i in 0..suit.message_count as usize {
                 msgs.push(c_buf_to_string(&suit.messages[i]));

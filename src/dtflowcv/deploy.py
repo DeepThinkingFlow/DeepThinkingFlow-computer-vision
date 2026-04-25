@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from dtflowcv.config import write_json
+from dtflowcv.deps import missing_optional_blockers
 
 
 @dataclass
@@ -191,13 +192,12 @@ def environment_check() -> dict[str, Any]:
     # Overall readiness
     blockers = []
     if pkg_status.get("numpy") == "not_installed":
-        blockers.append("numpy missing")
-    if pkg_status.get("opencv") == "not_installed":
-        blockers.append("opencv missing — needed for video/visualization")
-    if pkg_status.get("ultralytics") == "not_installed":
-        blockers.append("ultralytics missing — needed for YOLO inference")
+        blockers.append("missing_python_module:numpy: install with python -m pip install -e '.[dev]'")
+    blockers.extend(missing_optional_blockers(["cv2", "ultralytics", "onnxruntime"]))
 
+    checks["build_blockers"] = blockers
     checks["blockers"] = blockers
     checks["ready"] = len(blockers) == 0
+    checks["status"] = "ok" if checks["ready"] else "blocked"
 
     return checks

@@ -75,17 +75,26 @@ def map_at_iou(
     class_count: int,
     iou_threshold: float = 0.5,
 ) -> dict[str, object]:
+    valid_targets = [target for target in targets if _is_valid_class_id(target.class_id, class_count)]
+    invalid_targets = [target for target in targets if not _is_valid_class_id(target.class_id, class_count)]
+    valid_predictions = [
+        prediction for prediction in predictions if _is_valid_class_id(prediction.class_id, class_count)
+    ]
+    unknown_predictions = [
+        prediction for prediction in predictions if not _is_valid_class_id(prediction.class_id, class_count)
+    ]
+
     per_class: dict[int, float | None] = {}
     per_class_detail: dict[int, dict[str, object]] = {}
-    false_positive_count = 0
+    false_positive_count = len(unknown_predictions)
     false_negative_count = 0
 
     # Group by class once
     targets_by_class: dict[int, list[DetectionTarget]] = defaultdict(list)
     predictions_by_class: dict[int, list[DetectionPrediction]] = defaultdict(list)
-    for target in targets:
+    for target in valid_targets:
         targets_by_class[target.class_id].append(target)
-    for prediction in predictions:
+    for prediction in valid_predictions:
         predictions_by_class[prediction.class_id].append(prediction)
 
     for class_id in range(class_count):
@@ -171,8 +180,11 @@ def map_at_iou(
         "hardest_classes": [{"class_id": cid, **d} for cid, d in hardest[:5]],
         "false_positives": false_positive_count,
         "false_negatives": false_negative_count,
-        "target_count": len(targets),
+        "target_count": len(valid_targets),
         "prediction_count": len(predictions),
+        "evaluated_prediction_count": len(valid_predictions),
+        "invalid_target_class_id_count": len(invalid_targets),
+        "unknown_prediction_fp": len(unknown_predictions),
     }
 
 
@@ -187,9 +199,12 @@ def confusion_matrix(
     Matrix[i][j] = count of GT class i predicted as class j.
     Matrix[i][class_count] = GT class i missed (FN).
     Matrix[class_count][j] = FP predicted as class j with no GT match.
+    Matrix[*][class_count + 1] and Matrix[class_count + 1][*] are out-of-schema class IDs.
     """
-    # (class_count+1) x (class_count+1) — last row/col = background
-    n = class_count + 1
+    # valid classes + background + unknown schema bucket
+    background_idx = class_count
+    unknown_idx = class_count + 1
+    n = class_count + 2
     matrix = np.zeros((n, n), dtype=np.int32)
 
     # Group by image
@@ -205,6 +220,7 @@ def confusion_matrix(
     for image_id in all_image_ids:
         img_targets = targets_by_image.get(image_id, [])
         img_preds = sorted(preds_by_image.get(image_id, []), key=lambda p: p.score, reverse=True)
+        targets_by_idx = {idx: target for idx, target in img_targets}
 
         matched_gt: set[int] = set()
 
@@ -220,24 +236,32 @@ def confusion_matrix(
                     best_idx = idx
 
             if best_iou >= iou_threshold and best_idx >= 0:
-                gt_class = img_targets[[i for i, (idx, _) in enumerate(img_targets) if idx == best_idx][0]][1].class_id
+                gt_class = _matrix_class_index(targets_by_idx[best_idx].class_id, class_count, unknown_idx)
+                pred_class = _matrix_class_index(pred.class_id, class_count, unknown_idx)
                 matched_gt.add(best_idx)
                 # GT=gt_class, Pred=pred.class_id
-                matrix[gt_class][pred.class_id] += 1
+                matrix[gt_class][pred_class] += 1
             else:
                 # FP: no GT match → background row
-                matrix[class_count][pred.class_id] += 1
+                pred_class = _matrix_class_index(pred.class_id, class_count, unknown_idx)
+                matrix[background_idx][pred_class] += 1
 
         # Unmatched GTs → FN (predicted as background)
         for idx, gt in img_targets:
             if idx not in matched_gt:
-                matrix[gt.class_id][class_count] += 1
+                gt_class = _matrix_class_index(gt.class_id, class_count, unknown_idx)
+                matrix[gt_class][background_idx] += 1
 
     return {
         "matrix": matrix.tolist(),
         "size": n,
         "class_count": class_count,
-        "note": "matrix[i][j] = GT class i predicted as class j. Last row/col = background.",
+        "background_index": background_idx,
+        "unknown_index": unknown_idx,
+        "note": (
+            "matrix[i][j] = GT class i predicted as class j. "
+            "Background index is missed/no-GT. Unknown index is out-of-schema class id."
+        ),
     }
 
 
@@ -330,3 +354,13 @@ def _average_precision_np(tp: np.ndarray, fp: np.ndarray, target_count: int) -> 
 
     ap = float(np.sum((mrec[indices] - mrec[indices - 1]) * mpre[indices]))
     return ap
+
+
+def _is_valid_class_id(class_id: int, class_count: int) -> bool:
+    return 0 <= class_id < class_count
+
+
+def _matrix_class_index(class_id: int, class_count: int, unknown_idx: int) -> int:
+    if _is_valid_class_id(class_id, class_count):
+        return class_id
+    return unknown_idx

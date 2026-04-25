@@ -44,7 +44,7 @@ def normalize_hwc_u8_to_chw_f32(
     # Optimized numpy fallback: in-place operations, precomputed constants
     arr = image.astype(np.float32)
     inv_255_std = np.array([1.0 / (255.0 * s) for s in std], dtype=np.float32)
-    bias = np.array([-m / s for m, s in zip(mean, std)], dtype=np.float32)
+    bias = np.array([-m / s for m, s in zip(mean, std, strict=False)], dtype=np.float32)
     # Fused multiply-add: out = pixel * (1/(255*std)) + (-mean/std)
     np.multiply(arr, inv_255_std, out=arr)
     np.add(arr, bias, out=arr)

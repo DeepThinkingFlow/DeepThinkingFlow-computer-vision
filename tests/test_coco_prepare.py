@@ -1,10 +1,9 @@
 from pathlib import Path
 
-from PIL import Image
-
 from dtflowcv.coco import prepare_coco_yolo
 from dtflowcv.config import write_json
 from dtflowcv.dataset import audit_dataset
+from PIL import Image
 
 
 def test_prepare_coco_yolo_keeps_empty_and_converts_target_boxes(tmp_path: Path) -> None:
@@ -38,6 +37,9 @@ def test_prepare_coco_yolo_keeps_empty_and_converts_target_boxes(tmp_path: Path)
     assert summary["written_image_count"] == 2
     assert summary["kept_annotation_count"] == 1
     assert summary["empty_label_image_count"] == 1
+    assert summary["dataset_yaml"].endswith("dataset_smoke_all.yaml")
+    assert (out / "dataset_smoke_all.yaml").exists()
+    assert summary["warnings"]
 
     report = audit_dataset(out, ["person", "traffic_light"])
     assert report["summary"]["image_count"] == 2

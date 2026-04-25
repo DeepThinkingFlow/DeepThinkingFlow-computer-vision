@@ -17,6 +17,7 @@ from dtflowcv.dataset import (
     write_split_manifests,
 )
 from dtflowcv.demo import create_demo_dataset
+from dtflowcv.deps import blocked_payload, missing_optional_blockers
 from dtflowcv.errors import export_detection_errors
 from dtflowcv.evaluate import evaluate_yolo_predictions
 from dtflowcv.health import project_health
@@ -36,6 +37,17 @@ def _emit(payload: dict | list) -> None:
 def _exit_with_errors(errors: list[str], status: str = "failed", code: int = 1) -> None:
     _emit({"status": status, "errors": errors})
     raise typer.Exit(code)
+
+
+def _exit_with_payload(payload: dict, code: int = 2) -> None:
+    _emit(payload)
+    raise typer.Exit(code)
+
+
+def _block_if_missing(modules: list[str]) -> None:
+    blockers = missing_optional_blockers(modules)
+    if blockers:
+        _exit_with_payload(blocked_payload(blockers))
 
 
 # ── Existing Commands ────────────────────────────────────────
@@ -166,6 +178,39 @@ def benchmark_yolo_cmd(
         raise typer.Exit(2)
 
 
+@app.command("benchmark-inference")
+def benchmark_inference_cmd(
+    images: Path = typer.Option(..., help="Image directory"),
+    model: Path = typer.Option(Path("yolov8n.pt"), help="YOLO checkpoint"),
+    problem: Path | None = typer.Option(None, help="Optional problem YAML path for report context"),
+    device: str = typer.Option("cpu", help="Inference device"),
+    warmup: int = typer.Option(5, min=0, help="Warmup runs"),
+    runs: int = typer.Option(30, min=1, help="Measured runs"),
+    batch: int = typer.Option(1, min=1, help="Batch size; only 1 has per-image timing"),
+    image_size: int = typer.Option(640, min=1, help="Inference image size"),
+    max_images: int | None = typer.Option(None, min=1, help="Optional image limit"),
+    out: Path | None = typer.Option(None, help="Optional benchmark JSON output"),
+) -> None:
+    from dtflowcv.inference_benchmark import benchmark_inference
+
+    result = benchmark_inference(
+        images,
+        model,
+        problem_path=problem,
+        device=device,
+        warmup=warmup,
+        runs=runs,
+        batch=batch,
+        image_size=image_size,
+        max_images=max_images,
+    )
+    if out:
+        write_json(out, result)
+    _emit(result)
+    if result.get("status") != "ok":
+        raise typer.Exit(2)
+
+
 @app.command("predict-yolo")
 def predict_yolo_cmd(
     images: Path = typer.Option(..., help="Image directory"),
@@ -273,7 +318,12 @@ def train_baseline_cmd(
     try:
         result = train_yolo_baseline(problem, dataset, train_config)
     except RuntimeError as exc:
-        _emit({"status": "blocked", "reason": str(exc)})
+        reason = str(exc)
+        if reason.startswith("build_blockers:"):
+            blockers = [item.strip() for item in reason.removeprefix("build_blockers:").split(";") if item.strip()]
+        else:
+            blockers = [reason]
+        _emit(blocked_payload(blockers))
         raise typer.Exit(2) from exc
     _emit(result)
 
@@ -300,6 +350,7 @@ def visualize_errors_cmd(
     iou: float = typer.Option(0.5, help="IoU threshold"),
     max_images: int | None = typer.Option(None, min=1, help="Optional image limit"),
 ) -> None:
+    _block_if_missing(["cv2"])
     from dtflowcv.visualize import save_annotated_errors
     spec = load_yaml(problem)
     result = save_annotated_errors(images, labels, preds, out, class_names(spec),
@@ -315,6 +366,7 @@ def error_grid_cmd(
     problem: Path = typer.Option(Path("configs/problem.yaml"), help="Problem YAML path"),
     out: Path = typer.Option(Path("reports/error_grid.jpg"), help="Output grid image"),
 ) -> None:
+    _block_if_missing(["cv2"])
     from dtflowcv.visualize import make_error_grid
     spec = load_yaml(problem)
     result = make_error_grid(images, labels, preds, out, class_names(spec))
@@ -331,6 +383,7 @@ def infer_video_cmd(
     conf: float = typer.Option(0.25, help="Detection confidence"),
     iou: float = typer.Option(0.45, help="NMS IoU"),
     tracking: bool = typer.Option(True, help="Enable tracking"),
+    class_agnostic_tracking: bool = typer.Option(False, help="Allow tracks to match detections across classes"),
     max_frames: int | None = typer.Option(None, min=1, help="Max frames"),
     sample_fps: float | None = typer.Option(None, help="Sample FPS"),
 ) -> None:
@@ -339,6 +392,7 @@ def infer_video_cmd(
         source, problem, model_path=model,
         output_video=out_video, output_json=out_json,
         conf=conf, iou=iou, enable_tracking=tracking,
+        tracker_class_aware=not class_agnostic_tracking,
         max_frames=max_frames, sample_fps=sample_fps,
     )
     _emit(result)
@@ -359,6 +413,8 @@ def infer_images_cmd(
     result = infer_images(images, problem, model_path=model, output_dir=out,
                           conf=conf, max_images=max_images)
     _emit(result)
+    if result.get("status") != "ok":
+        raise typer.Exit(2)
 
 
 @app.command("extract-frames")
@@ -369,8 +425,12 @@ def extract_frames_cmd(
     max_frames: int | None = typer.Option(None, min=1, help="Max frames"),
     format: str = typer.Option("jpg", help="Image format"),
 ) -> None:
+    _block_if_missing(["cv2"])
     from dtflowcv.video import extract_frames
-    result = extract_frames(source, out, sample_fps=sample_fps, max_frames=max_frames, format=format)
+    try:
+        result = extract_frames(source, out, sample_fps=sample_fps, max_frames=max_frames, format=format)
+    except OSError as exc:
+        _exit_with_payload({"status": "failed", "errors": [f"video_io_error:{exc}"]})
     _emit({"status": "ok", **result})
 
 

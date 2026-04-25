@@ -69,7 +69,7 @@ def train_yolo_baseline(
         metrics = _extract_metrics(result)
         metrics["train_elapsed_seconds"] = elapsed_seconds
         metrics["max_rss_mb"] = _max_rss_mb()
-        mlflow.log_metrics({key: float(value) for key, value in metrics.items() if isinstance(value, (int, float))})
+        mlflow.log_metrics({key: float(value) for key, value in metrics.items() if isinstance(value, int | float)})
         mlflow.log_param("result_type", type(result).__name__)
         if hasattr(result, "save_dir"):
             mlflow.log_param("ultralytics_save_dir", str(result.save_dir))
@@ -178,7 +178,7 @@ def _valid_names_payload(names: Any) -> bool:
 
 
 def _names_count(names: Any) -> int:
-    if isinstance(names, (dict, list)):
+    if isinstance(names, dict | list):
         return len(names)
     return 0
 
@@ -193,7 +193,7 @@ def _extract_metrics(result: Any) -> dict[str, float]:
     result_dict = getattr(result, "results_dict", None)
     if isinstance(result_dict, dict):
         for key, value in result_dict.items():
-            if isinstance(value, (int, float)):
+            if isinstance(value, int | float):
                 clean_key = str(key).replace("metrics/", "").replace("(", "").replace(")", "").replace(":", "_")
                 metrics[clean_key] = float(value)
     return metrics

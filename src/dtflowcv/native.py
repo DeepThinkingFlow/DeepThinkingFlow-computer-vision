@@ -47,7 +47,6 @@ def hardware_report() -> dict[str, Any]:
 def _python_hw_fallback() -> dict[str, Any]:
     """Basic hardware detection using only Python stdlib."""
     import os
-    import struct
 
     cpu: dict[str, Any] = {
         "arch": platform.machine(),

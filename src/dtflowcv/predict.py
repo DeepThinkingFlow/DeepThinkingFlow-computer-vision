@@ -6,6 +6,7 @@ from typing import Any
 from PIL import Image
 
 from dtflowcv.config import load_yaml, write_json
+from dtflowcv.deps import blocked_payload, missing_optional_blockers
 from dtflowcv.specs import class_names, validate_problem_spec
 from dtflowcv.yolo import iter_images
 
@@ -28,13 +29,11 @@ def predict_ultralytics_yolo(
             "build_blockers": [f"invalid_problem_spec:{error}" for error in errors],
         }
 
-    try:
-        from ultralytics import YOLO
-    except ImportError:
-        return {
-            "status": "blocked",
-            "build_blockers": ["missing_python_module:ultralytics: install with python3 -m pip install -e '.[train]'"],
-        }
+    blockers = missing_optional_blockers(["ultralytics"])
+    if blockers:
+        return blocked_payload(blockers)
+
+    from ultralytics import YOLO
 
     image_root = Path(images)
     image_paths = iter_images(image_root)

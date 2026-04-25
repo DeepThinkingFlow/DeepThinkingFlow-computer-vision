@@ -3,13 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from PIL import Image
 
 from dtflowcv.metrics import (
     DetectionPrediction,
     DetectionTarget,
-    box_iou_matrix_np,
     confusion_matrix,
     map_at_iou,
     precision_recall_curve,
@@ -33,6 +31,8 @@ def evaluate_yolo_predictions(
     """
     targets: list[DetectionTarget] = []
     predictions: list[DetectionPrediction] = []
+    invalid_target_class_ids: list[dict[str, Any]] = []
+    invalid_prediction_class_ids: list[dict[str, Any]] = []
     images_root = Path(images_dir)
     labels_root = Path(labels_dir)
     preds_root = Path(predictions_dir)
@@ -54,10 +54,27 @@ def evaluate_yolo_predictions(
 
         label_path = related_label_path(image_path, images_root, labels_root)
         for box in parse_yolo_label_file(label_path):
-            targets.append(DetectionTarget(image_id, box.class_id, yolo_to_xyxy(box, width, height)))
+            if _valid_class_id(box.class_id, class_count):
+                targets.append(DetectionTarget(image_id, box.class_id, yolo_to_xyxy(box, width, height)))
+            else:
+                _append_schema_error(
+                    invalid_target_class_ids,
+                    image_id=image_id,
+                    class_id=box.class_id,
+                    path=label_path,
+                    kind="invalid_target_class_id",
+                )
 
         pred_path = related_label_path(image_path, images_root, preds_root)
         for box in parse_yolo_label_file(pred_path, with_confidence=True):
+            if not _valid_class_id(box.class_id, class_count):
+                _append_schema_error(
+                    invalid_prediction_class_ids,
+                    image_id=image_id,
+                    class_id=box.class_id,
+                    path=pred_path,
+                    kind="invalid_prediction_class_id",
+                )
             predictions.append(
                 DetectionPrediction(
                     image_id=image_id,
@@ -68,8 +85,13 @@ def evaluate_yolo_predictions(
             )
 
     result = map_at_iou(targets, predictions, class_count, iou_threshold)
+    result["status"] = "ok"
     result["metric_name"] = f"mAP@{iou_threshold:.2f}"
     result["image_count"] = len(image_paths)
+    result["invalid_target_class_ids"] = invalid_target_class_ids
+    result["invalid_prediction_class_ids"] = invalid_prediction_class_ids
+    result["invalid_target_class_id_count"] = len(invalid_target_class_ids)
+    result["invalid_prediction_class_id_count"] = len(invalid_prediction_class_ids)
 
     # Confusion matrix
     cm = confusion_matrix(targets, predictions, class_count, iou_threshold)
@@ -148,3 +170,21 @@ def _selected_images(images_root: Path, image_manifest: str | Path | None, max_i
     if max_images is not None:
         return image_paths[:max_images]
     return image_paths
+
+
+def _valid_class_id(class_id: int, class_count: int) -> bool:
+    return 0 <= class_id < class_count
+
+
+def _append_schema_error(
+    errors: list[dict[str, Any]],
+    *,
+    image_id: str,
+    class_id: int,
+    path: Path,
+    kind: str,
+    limit: int = 50,
+) -> None:
+    if len(errors) >= limit:
+        return
+    errors.append({"kind": kind, "image_id": image_id, "class_id": class_id, "path": str(path)})

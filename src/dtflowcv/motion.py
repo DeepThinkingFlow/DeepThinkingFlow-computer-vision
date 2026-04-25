@@ -203,6 +203,8 @@ class ZoneMonitor:
         for i in range(n):
             xi, yi = self.polygon[i]
             xj, yj = self.polygon[j]
+            if _point_on_segment(x, y, xi, yi, xj, yj):
+                return False
             if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
                 inside = not inside
             j = i
@@ -237,6 +239,23 @@ class ZoneMonitor:
         self._inside.clear()
         self.enter_count = 0
         self.exit_count = 0
+
+
+def _point_on_segment(
+    px: float,
+    py: float,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    epsilon: float = 1e-9,
+) -> bool:
+    cross = (px - x1) * (y2 - y1) - (py - y1) * (x2 - x1)
+    if abs(cross) > epsilon:
+        return False
+    return min(x1, x2) - epsilon <= px <= max(x1, x2) + epsilon and min(y1, y2) - epsilon <= py <= max(
+        y1, y2
+    ) + epsilon
 
 
 class MotionDetector:

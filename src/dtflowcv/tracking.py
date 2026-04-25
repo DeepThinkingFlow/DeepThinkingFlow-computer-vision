@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import enum
-from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any
 
 import numpy as np
 
 from dtflowcv.metrics import box_iou_matrix_np
-
 
 # ── Track state ──────────────────────────────────────────────
 
@@ -172,14 +169,15 @@ class Track:
 class SORTTracker:
     """Simple Online and Realtime Tracking (SORT).
 
-    Manages object tracks using Kalman filter prediction + Hungarian
-    assignment based on IoU cost matrix.
+    Manages object tracks using Kalman filter prediction and greedy IoU
+    assignment.
 
     Args:
         max_age: Frames to keep lost track alive before deletion.
         min_hits: Hits needed before track is confirmed.
         iou_threshold: Minimum IoU for detection-track matching.
         motion_threshold: Pixel displacement threshold for motion detection.
+        class_aware: When true, detections cannot update tracks with a different class.
     """
 
     def __init__(
@@ -188,11 +186,13 @@ class SORTTracker:
         min_hits: int = 3,
         iou_threshold: float = 0.3,
         motion_threshold: float = 5.0,
+        class_aware: bool = True,
     ) -> None:
         self.max_age = max_age
         self.min_hits = min_hits
         self.iou_threshold = iou_threshold
         self.motion_threshold = motion_threshold
+        self.class_aware = class_aware
         self._tracks: list[Track] = []
         self._frame_count = 0
 
@@ -240,7 +240,10 @@ class SORTTracker:
 
         # 2. Match detections to tracks using IoU
         matched, unmatched_dets, unmatched_trks = self._match(
-            detections, np.array(predicted_boxes) if predicted_boxes else np.empty((0, 4)),
+            detections,
+            np.array(predicted_boxes) if predicted_boxes else np.empty((0, 4)),
+            class_ids,
+            np.array([track.class_id for track in active_tracks], dtype=np.int32),
         )
 
         # 3. Update matched tracks
@@ -281,6 +284,7 @@ class SORTTracker:
             track = Track(
                 track_id=kalman.id,
                 class_id=int(class_ids[det_idx]),
+                status=TrackStatus.CONFIRMED if kalman.hits >= self.min_hits else TrackStatus.TENTATIVE,
                 _kalman=kalman,
                 trajectory=[(float(cx), float(cy))],
                 scores=[float(scores[det_idx])],
@@ -297,8 +301,10 @@ class SORTTracker:
         self,
         detections: np.ndarray,
         predictions: np.ndarray,
+        detection_class_ids: np.ndarray,
+        track_class_ids: np.ndarray,
     ) -> tuple[list[tuple[int, int]], list[int], list[int]]:
-        """Hungarian matching via IoU cost matrix."""
+        """Greedy matching via IoU cost matrix."""
         n_det = len(detections)
         n_trk = len(predictions)
 
@@ -312,6 +318,9 @@ class SORTTracker:
             detections.astype(np.float32),
             predictions.astype(np.float32),
         )
+        if self.class_aware:
+            class_match = detection_class_ids.reshape(-1, 1) == track_class_ids.reshape(1, -1)
+            iou_matrix = np.where(class_match, iou_matrix, -1.0)
 
         # Greedy assignment (simpler than full Hungarian, adequate for SORT)
         matched = []

@@ -4,11 +4,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image
 
-from dtflowcv.metrics import box_iou
-from dtflowcv.yolo import parse_yolo_label_file, related_label_path, yolo_to_xyxy, iter_images
-
+from dtflowcv.yolo import iter_images, parse_yolo_label_file, related_label_path, yolo_to_xyxy
 
 # ── Color Palette ────────────────────────────────────────────
 
@@ -53,7 +50,7 @@ def draw_detections(
 
     out = image.copy()
     for i in range(len(boxes_xyxy)):
-        x1, y1, x2, y2 = [int(v) for v in boxes_xyxy[i]]
+        x1, y1, x2, y2 = (int(v) for v in boxes_xyxy[i])
         cid = int(class_ids[i])
         color = _bgr(_color_for_class(cid))
 
@@ -98,14 +95,17 @@ def draw_errors(
                 continue
             ious = iou_matrix[pi]
             best_gi = int(np.argmax(ious))
-            if ious[best_gi] >= iou_threshold and best_gi not in matched_gt:
-                if int(pred_classes[pi]) == int(gt_classes[best_gi]):
-                    matched_gt.add(best_gi)
-                    matched_pred.add(int(pi))
+            if (
+                ious[best_gi] >= iou_threshold
+                and best_gi not in matched_gt
+                and int(pred_classes[pi]) == int(gt_classes[best_gi])
+            ):
+                matched_gt.add(best_gi)
+                matched_pred.add(int(pi))
 
     # Draw TP (green)
     for pi in matched_pred:
-        x1, y1, x2, y2 = [int(v) for v in pred_boxes[pi]]
+        x1, y1, x2, y2 = (int(v) for v in pred_boxes[pi])
         cv2.rectangle(out, (x1, y1), (x2, y2), (0, 200, 0), 2)
         label = "TP"
         if class_names and int(pred_classes[pi]) < len(class_names):
@@ -116,7 +116,7 @@ def draw_errors(
     for pi in range(len(pred_boxes)):
         if pi in matched_pred:
             continue
-        x1, y1, x2, y2 = [int(v) for v in pred_boxes[pi]]
+        x1, y1, x2, y2 = (int(v) for v in pred_boxes[pi])
         cv2.rectangle(out, (x1, y1), (x2, y2), (0, 0, 220), 2)
         label = f"FP {pred_scores[pi]:.2f}"
         if class_names and int(pred_classes[pi]) < len(class_names):
@@ -127,7 +127,7 @@ def draw_errors(
     for gi in range(len(gt_boxes)):
         if gi in matched_gt:
             continue
-        x1, y1, x2, y2 = [int(v) for v in gt_boxes[gi]]
+        x1, y1, x2, y2 = (int(v) for v in gt_boxes[gi])
         # Dashed rectangle
         _draw_dashed_rect(out, (x1, y1), (x2, y2), (0, 200, 255), 2, dash_length=8)
         label = "FN"
@@ -153,7 +153,7 @@ def draw_tracking(
         bbox = track.last_bbox
         if bbox is None:
             continue
-        x1, y1, x2, y2 = [int(v) for v in bbox]
+        x1, y1, x2, y2 = (int(v) for v in bbox)
         color = _bgr(_color_for_class(track.class_id))
 
         cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
@@ -358,7 +358,7 @@ def make_error_grid(
             continue
 
         # Crop around the FP box
-        x1, y1, x2, y2 = [max(0, int(v)) for v in bbox]
+        x1, y1, x2, y2 = (max(0, int(v)) for v in bbox)
         crop = img[y1:y2, x1:x2]
         if crop.size == 0:
             continue
@@ -393,7 +393,6 @@ def _draw_dashed_rect(
     dash_length: int = 8,
 ) -> None:
     """Draw a dashed rectangle."""
-    import cv2
 
     edges = [
         (pt1, (pt2[0], pt1[1])),
@@ -462,9 +461,12 @@ def _matched_pred_indices(
     for pi in order:
         ious = iou_matrix[pi]
         best_gi = int(np.argmax(ious))
-        if ious[best_gi] >= iou_threshold and best_gi not in matched_gt:
-            if int(pred_classes[pi]) == int(gt_classes[best_gi]):
-                matched_gt.add(best_gi)
-                matched_pred.add(int(pi))
+        if (
+            ious[best_gi] >= iou_threshold
+            and best_gi not in matched_gt
+            and int(pred_classes[pi]) == int(gt_classes[best_gi])
+        ):
+            matched_gt.add(best_gi)
+            matched_pred.add(int(pi))
 
     return matched_pred

@@ -106,7 +106,7 @@ def _empty(value: Any) -> bool:
         return True
     if isinstance(value, str) and not value.strip():
         return True
-    return bool(isinstance(value, (list, dict)) and not value)
+    return bool(isinstance(value, list | dict) and not value)
 
 
 def _is_non_negative_number(value: Any) -> bool:

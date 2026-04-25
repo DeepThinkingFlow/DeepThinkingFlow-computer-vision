@@ -5,11 +5,10 @@ import json
 import random
 from pathlib import Path
 
-from PIL import Image, ImageDraw
-
 from dtflowcv.config import load_yaml
 from dtflowcv.specs import class_names
 from dtflowcv.yolo import iter_images, parse_yolo_label_file, yolo_to_xyxy
+from PIL import Image, ImageDraw
 
 BOX_COLOR = (34, 197, 94)
 TEXT_BG = (15, 23, 42)

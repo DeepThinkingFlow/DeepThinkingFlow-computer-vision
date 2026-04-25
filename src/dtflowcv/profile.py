@@ -39,6 +39,7 @@ def profile_preprocess(
     ordered = sorted(timings_ms)
     total_seconds = sum(timings_ms) / 1000.0
     return {
+        "status": "ok",
         "image_count": len(image_paths),
         "iterations": iterations,
         "sample_count": len(timings_ms),

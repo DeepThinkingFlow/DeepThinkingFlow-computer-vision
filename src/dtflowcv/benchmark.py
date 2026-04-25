@@ -60,8 +60,9 @@ def benchmark_yolo_pipeline(
         "preprocess": preprocess,
         "acceptance": acceptance,
         "claim_boundary": (
-            "This benchmark proves only the supplied images, labels, predictions, and preprocessing run. "
-            "It is not a trained-model quality claim unless the inputs are a locked real benchmark split."
+            "This is a prediction-file benchmark plus preprocessing micro-profile. It does not measure model "
+            "forward pass, NMS, device transfer, or end-to-end inference latency. Use benchmark-inference for "
+            "runtime latency/FPS on a model checkpoint."
         ),
     }
 

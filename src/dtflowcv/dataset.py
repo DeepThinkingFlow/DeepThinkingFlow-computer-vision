@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import math
 import random
-import statistics
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -27,13 +27,14 @@ class ImageRecord:
     boxes: tuple[YoloBox, ...]
     label_file_exists: bool
     label_errors: tuple[str, ...] = ()
+    image_errors: tuple[str, ...] = ()
 
     @property
     def class_ids(self) -> set[int]:
         return {box.class_id for box in self.boxes}
 
 
-def _load_single_record(image_path: Path, root: Path, strict_labels: bool) -> ImageRecord:
+def _load_single_record(image_path: Path, root: Path, strict_labels: bool, strict_images: bool) -> ImageRecord:
     label_path = label_path_for_image(image_path, root)
     label_exists = label_path.exists()
     label_errors: tuple[str, ...] = ()
@@ -44,14 +45,30 @@ def _load_single_record(image_path: Path, root: Path, strict_labels: bool) -> Im
             raise
         boxes = ()
         label_errors = (str(exc),)
-    with Image.open(image_path) as image:
-        rgb = image.convert("RGB")
-        width, height = rgb.size
-        brightness = _mean_brightness(rgb)
-    return ImageRecord(image_path, label_path, width, height, brightness, boxes, label_exists, label_errors)
+    image_errors: tuple[str, ...] = ()
+    try:
+        with Image.open(image_path) as image:
+            rgb = image.convert("RGB")
+            width, height = rgb.size
+            brightness = _mean_brightness(rgb)
+    except Exception as exc:
+        if strict_images:
+            raise
+        width = 0
+        height = 0
+        brightness = 0.0
+        boxes = ()
+        image_errors = (str(exc),)
+    return ImageRecord(
+        image_path, label_path, width, height, brightness, boxes, label_exists, label_errors, image_errors
+    )
 
 
-def load_records(dataset_root: str | Path, strict_labels: bool = True) -> list[ImageRecord]:
+def load_records(
+    dataset_root: str | Path,
+    strict_labels: bool = True,
+    strict_images: bool = True,
+) -> list[ImageRecord]:
     root = Path(dataset_root)
     image_dir = root / "images" if (root / "images").exists() else root
     image_paths = iter_images(image_dir)
@@ -63,14 +80,14 @@ def load_records(dataset_root: str | Path, strict_labels: bool = True) -> list[I
     max_workers = min(8, len(image_paths))
     if max_workers > 1 and len(image_paths) > 4:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = [pool.submit(_load_single_record, p, root, strict_labels) for p in image_paths]
+            futures = [pool.submit(_load_single_record, p, root, strict_labels, strict_images) for p in image_paths]
             return [f.result() for f in futures]
 
-    return [_load_single_record(p, root, strict_labels) for p in image_paths]
+    return [_load_single_record(p, root, strict_labels, strict_images) for p in image_paths]
 
 
 def audit_dataset(dataset_root: str | Path, class_names: list[str]) -> dict[str, Any]:
-    records = load_records(dataset_root, strict_labels=False)
+    records = load_records(dataset_root, strict_labels=False, strict_images=False)
     class_counter: Counter[int] = Counter()
     unknown_class_counter: Counter[int] = Counter()
     bbox_areas: list[float] = []
@@ -94,6 +111,7 @@ def audit_dataset(dataset_root: str | Path, class_names: list[str]) -> dict[str,
         "dataset_root": str(Path(dataset_root).resolve()),
         "summary": {
             "image_count": len(records),
+            "corrupt_image_count": sum(1 for record in records if record.image_errors),
             "annotated_image_count": sum(1 for record in records if record.boxes),
             "object_count": sum(class_counter.values()),
             "unknown_class_object_count": sum(unknown_class_counter.values()),
@@ -113,6 +131,11 @@ def audit_dataset(dataset_root: str | Path, class_names: list[str]) -> dict[str,
         "image_aspect_ratio": _describe(aspect_ratios),
         "brightness": _describe(brightness),
         "bbox_area_ratio": _describe(bbox_areas),
+        "duplicate_groups": _duplicate_groups(records),
+        "split_leakage_candidates": _split_leakage_candidates(records),
+        "corrupt_images": _image_errors(records),
+        "bbox_outliers": _bbox_outliers(records),
+        "class_imbalance_severity": _class_imbalance_severity(class_counter),
         "label_errors": _label_errors(records),
         "warnings": _warnings(records, class_counter, class_names),
     }
@@ -242,6 +265,9 @@ def _warnings(records: list[ImageRecord], class_counter: Counter[int], class_nam
     invalid = sum(1 for record in records if record.label_errors)
     if invalid:
         warnings.append(f"{invalid}_invalid_label_files")
+    corrupt = sum(1 for record in records if record.image_errors)
+    if corrupt:
+        warnings.append(f"{corrupt}_corrupt_images")
     missing = sum(1 for record in records if not record.label_file_exists)
     if missing:
         warnings.append(f"{missing}_missing_label_files")
@@ -266,6 +292,111 @@ def _warnings(records: list[ImageRecord], class_counter: Counter[int], class_nam
     if unknown:
         warnings.append("unknown_class_ids:" + ",".join(str(class_id) for class_id in unknown))
     return warnings
+
+
+def _duplicate_groups(records: list[ImageRecord], limit: int = 50) -> list[dict[str, Any]]:
+    by_hash: dict[str, list[Path]] = {}
+    for record in records:
+        if record.image_errors:
+            continue
+        digest = _file_sha256(record.image_path)
+        by_hash.setdefault(digest, []).append(record.image_path)
+    groups = [
+        {"sha256": digest, "images": [str(path) for path in sorted(paths)]}
+        for digest, paths in sorted(by_hash.items())
+        if len(paths) > 1
+    ]
+    return groups[:limit]
+
+
+def _split_leakage_candidates(records: list[ImageRecord], limit: int = 50) -> list[dict[str, Any]]:
+    by_hash: dict[str, list[tuple[str, Path]]] = {}
+    for record in records:
+        if record.image_errors:
+            continue
+        split = _split_name(record.image_path)
+        if split is None:
+            continue
+        digest = _file_sha256(record.image_path)
+        by_hash.setdefault(digest, []).append((split, record.image_path))
+    leaks: list[dict[str, Any]] = []
+    for digest, items in sorted(by_hash.items()):
+        splits = sorted({split for split, _ in items})
+        if len(splits) > 1:
+            leaks.append({
+                "sha256": digest,
+                "splits": splits,
+                "images": [str(path) for _, path in sorted(items, key=lambda item: str(item[1]))],
+            })
+            if len(leaks) >= limit:
+                break
+    return leaks
+
+
+def _split_name(path: Path) -> str | None:
+    for part in path.parts:
+        if part in {"train", "val", "test"}:
+            return part
+    return None
+
+
+def _image_errors(records: list[ImageRecord], limit: int = 50) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    for record in records:
+        for error in record.image_errors:
+            errors.append({"image": str(record.image_path), "error": error})
+            if len(errors) >= limit:
+                return errors
+    return errors
+
+
+def _bbox_outliers(records: list[ImageRecord], limit: int = 50) -> list[dict[str, Any]]:
+    outliers: list[dict[str, Any]] = []
+    for record in records:
+        for box in record.boxes:
+            box_aspect = box.width / max(box.height, 1e-9)
+            reasons = []
+            if box.area_ratio < 0.0001:
+                reasons.append("tiny_box_area")
+            if box.area_ratio > 0.90:
+                reasons.append("huge_box_area")
+            if box_aspect >= 10.0 or box_aspect <= 0.10:
+                reasons.append("extreme_box_aspect")
+            if reasons:
+                outliers.append({
+                    "image": str(record.image_path),
+                    "class_id": box.class_id,
+                    "area_ratio": box.area_ratio,
+                    "box_aspect_ratio": box_aspect,
+                    "reasons": reasons,
+                })
+                if len(outliers) >= limit:
+                    return outliers
+    return outliers
+
+
+def _class_imbalance_severity(class_counter: Counter[int]) -> dict[str, Any]:
+    counts = [count for count in class_counter.values() if count > 0]
+    if not counts:
+        return {"level": "none", "max_to_min_ratio": 0.0}
+    ratio = max(counts) / max(min(counts), 1)
+    if ratio >= 20:
+        level = "severe"
+    elif ratio >= 10:
+        level = "high"
+    elif ratio >= 3:
+        level = "moderate"
+    else:
+        level = "low"
+    return {"level": level, "max_to_min_ratio": ratio}
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _label_errors(records: list[ImageRecord], limit: int = 50) -> list[dict[str, str]]:

@@ -6,7 +6,7 @@ on:
     branches: ["main", "master"]
 
 jobs:
-  python:
+  python-core:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,24 +14,91 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install package
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]" -c constraints-dev.txt
       - name: Lint
         run: ruff check src tests scripts notebooks
       - name: Compile
         run: python -m compileall -q src tests scripts
       - name: Test
         run: python -m pytest -q
-      - name: Contract smoke
+      - name: Core CLI smoke
         run: |
           python -m dtflowcv check-spec configs/problem.yaml
           python -m dtflowcv make-demo-dataset --out /tmp/dtflowcv-demo --images 8
-          python -m dtflowcv benchmark-yolo \
-            --images /tmp/dtflowcv-demo/images \
-            --labels /tmp/dtflowcv-demo/labels \
-            --preds /tmp/dtflowcv-demo/predictions \
-            --profile-iterations 1 \
-            --width 64 \
-            --height 64
+          python -m dtflowcv audit-dataset /tmp/dtflowcv-demo --problem configs/problem.yaml --out /tmp/dtflowcv-audit
+          python -m dtflowcv split-dataset /tmp/dtflowcv-demo --problem configs/problem.yaml --out /tmp/dtflowcv-splits
+          python -m dtflowcv evaluate-yolo --images /tmp/dtflowcv-demo/images --labels /tmp/dtflowcv-demo/labels --preds /tmp/dtflowcv-demo/predictions --problem configs/problem.yaml
+          python -m dtflowcv benchmark-yolo --images /tmp/dtflowcv-demo/images --labels /tmp/dtflowcv-demo/labels --preds /tmp/dtflowcv-demo/predictions --profile-iterations 1 --width 64 --height 64
+          python -m dtflowcv export-errors --images /tmp/dtflowcv-demo/images --labels /tmp/dtflowcv-demo/labels --preds /tmp/dtflowcv-demo/predictions --problem configs/problem.yaml --out /tmp/dtflowcv-errors.json
+          python -m dtflowcv dataset-card /tmp/dtflowcv-demo --problem configs/problem.yaml --out /tmp/dtflowcv-card
+
+  python-viz-video:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: python -m pip install -e ".[dev,viz,video]" -c constraints-dev.txt -c constraints-benchmark.txt
+      - name: Visualization and video smoke
+        run: |
+          python -m dtflowcv make-demo-dataset --out /tmp/dtflowcv-demo --images 8
+          python -m dtflowcv visualize-errors --images /tmp/dtflowcv-demo/images --labels /tmp/dtflowcv-demo/labels --preds /tmp/dtflowcv-demo/predictions --problem configs/problem.yaml --out /tmp/dtflowcv-visual-errors --max-images 2
+          python -m dtflowcv error-grid --images /tmp/dtflowcv-demo/images --labels /tmp/dtflowcv-demo/labels --preds /tmp/dtflowcv-demo/predictions --problem configs/problem.yaml --out /tmp/dtflowcv-error-grid.jpg
+          python - <<'PY'
+          import cv2
+          import numpy as np
+          writer = cv2.VideoWriter("/tmp/dtflowcv-demo.mp4", cv2.VideoWriter_fourcc(*"mp4v"), 12.0, (64, 64))
+          for idx in range(4):
+              frame = np.full((64, 64, 3), idx * 40, dtype=np.uint8)
+              writer.write(frame)
+          writer.release()
+          PY
+          python -m dtflowcv extract-frames --source /tmp/dtflowcv-demo.mp4 --out /tmp/dtflowcv-frames --max-frames 2
+
+  python-heavy-blocked:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install core package only
+        run: python -m pip install -e ".[dev]" -c constraints-dev.txt
+      - name: Missing optional dependencies are blocked JSON
+        run: |
+          python -m dtflowcv make-demo-dataset --out /tmp/dtflowcv-demo --images 2
+          set +e
+          python -m dtflowcv infer-images --images /tmp/dtflowcv-demo/images --problem configs/problem.yaml --model yolov8n.pt --out /tmp/dtflowcv-annotated > /tmp/infer-images.json
+          infer_code=$?
+          python -m dtflowcv infer-video --source /tmp/missing.mp4 --problem configs/problem.yaml --model yolov8n.pt > /tmp/infer-video.json
+          video_code=$?
+          python -m dtflowcv export-model --model yolov8n.pt --out /tmp/model.onnx --format onnx > /tmp/export-model.json
+          export_code=$?
+          python -m dtflowcv benchmark-inference --images /tmp/dtflowcv-demo/images --model yolov8n.pt --runs 1 --warmup 0 > /tmp/benchmark-inference.json
+          bench_code=$?
+          python -m dtflowcv env-check > /tmp/env-check.json
+          env_code=$?
+          set -e
+          test "$infer_code" -eq 2
+          test "$video_code" -eq 2
+          test "$export_code" -eq 2
+          test "$bench_code" -eq 2
+          test "$env_code" -eq 2
+          python - <<'PY'
+          import json
+          for path in [
+              "/tmp/infer-images.json",
+              "/tmp/infer-video.json",
+              "/tmp/export-model.json",
+              "/tmp/benchmark-inference.json",
+              "/tmp/env-check.json",
+          ]:
+              payload = json.loads(open(path, encoding="utf-8").read())
+              assert payload["status"] == "blocked", payload
+              assert payload["build_blockers"], payload
+          PY
 
   native:
     runs-on: ubuntu-latest
@@ -39,3 +106,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Native Rust/C build contract
         run: cargo test --manifest-path native/dtflowcv_native/Cargo.toml
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No absolute local README links
+        run: '! rg "/home/danggiaminh" README.md'

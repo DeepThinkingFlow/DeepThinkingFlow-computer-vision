@@ -121,7 +121,8 @@ def prepare_coco_yolo(
         "val": f"images/{images_root.name}",
         "names": names,
     }
-    with (out_root / "dataset_all.yaml").open("w", encoding="utf-8") as fh:
+    dataset_yaml_path = out_root / "dataset_smoke_all.yaml"
+    with dataset_yaml_path.open("w", encoding="utf-8") as fh:
         yaml.safe_dump(dataset_yaml, fh, sort_keys=False)
 
     # Build filtered COCO JSON
@@ -160,7 +161,11 @@ def prepare_coco_yolo(
         "include_empty": include_empty,
         "include_crowd": include_crowd,
         "min_box_area_ratio": min_box_area_ratio,
-        "dataset_yaml": str(out_root / "dataset_all.yaml"),
+        "dataset_yaml": str(dataset_yaml_path),
+        "warnings": [
+            "dataset_smoke_all.yaml points train and val at the same image folder; "
+            "do not use it for real training or benchmark claims."
+        ],
         "filtered_coco_json": str(filtered_coco_path),
     }
     write_json(out_root / "prepare_summary.json", summary)

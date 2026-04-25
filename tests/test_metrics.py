@@ -1,4 +1,4 @@
-from dtflowcv.metrics import DetectionPrediction, DetectionTarget, box_iou, map_at_iou
+from dtflowcv.metrics import DetectionPrediction, DetectionTarget, box_iou, confusion_matrix, map_at_iou
 
 
 def test_box_iou() -> None:
@@ -13,3 +13,21 @@ def test_map_perfect_prediction() -> None:
     assert result["map"] == 1.0
     assert result["false_positives"] == 0
     assert result["false_negatives"] == 0
+
+
+def test_unknown_prediction_class_counts_as_false_positive() -> None:
+    targets = [DetectionTarget("a", 0, (0, 0, 10, 10))]
+    predictions = [DetectionPrediction("a", 999, (0, 0, 10, 10), 0.99)]
+    result = map_at_iou(targets, predictions, class_count=1)
+    assert result["unknown_prediction_fp"] == 1
+    assert result["false_positives"] == 1
+    assert result["false_negatives"] == 1
+
+
+def test_confusion_matrix_uses_unknown_bucket_for_out_of_schema_prediction() -> None:
+    targets = [DetectionTarget("a", 0, (0, 0, 10, 10))]
+    predictions = [DetectionPrediction("a", 999, (0, 0, 10, 10), 0.99)]
+    result = confusion_matrix(targets, predictions, class_count=1)
+    assert result["size"] == 3
+    assert result["unknown_index"] == 2
+    assert result["matrix"][0][2] == 1

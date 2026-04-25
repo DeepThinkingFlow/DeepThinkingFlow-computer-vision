@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import contextlib
-from dataclasses import dataclass, field
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Generator, Iterator
+from typing import Any
 
 import numpy as np
 
@@ -98,7 +98,7 @@ class VideoReader:
         import cv2
         self._cap = cv2.VideoCapture(self._source)
         if not self._cap.isOpened():
-            raise IOError(f"Cannot open video source: {self._source}")
+            raise OSError(f"Cannot open video source: {self._source}")
 
     def close(self) -> None:
         if self._cap is not None:
@@ -213,7 +213,7 @@ class VideoWriter:
             fourcc = cv2.VideoWriter_fourcc(*self._codec)
             self._writer = cv2.VideoWriter(str(self._path), fourcc, self._fps, self._size)
             if not self._writer.isOpened():
-                raise IOError(f"Cannot open video writer: {self._path}")
+                raise OSError(f"Cannot open video writer: {self._path}")
 
         self._writer.write(frame)
         self._frame_count += 1

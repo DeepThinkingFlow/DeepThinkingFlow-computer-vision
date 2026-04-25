@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from dtflowcv.config import write_json
+from dtflowcv.deps import blocked_payload, missing_optional_blockers
 
 
 @dataclass
@@ -70,10 +70,11 @@ def export_onnx(
     Returns:
         Summary dict with paths, hashes, status.
     """
-    try:
-        from ultralytics import YOLO
-    except ImportError:
-        return {"status": "blocked", "reason": "ultralytics not installed"}
+    blockers = missing_optional_blockers(["ultralytics", "onnx"])
+    if blockers:
+        return blocked_payload(blockers)
+
+    from ultralytics import YOLO
 
     model_p = Path(model_path)
     out_p = Path(output_path)
@@ -121,10 +122,11 @@ def export_torchscript(
     half: bool = False,
 ) -> dict[str, Any]:
     """Export Ultralytics YOLO model to TorchScript."""
-    try:
-        from ultralytics import YOLO
-    except ImportError:
-        return {"status": "blocked", "reason": "ultralytics not installed"}
+    blockers = missing_optional_blockers(["ultralytics", "torch"])
+    if blockers:
+        return blocked_payload(blockers)
+
+    from ultralytics import YOLO
 
     model_p = Path(model_path)
     out_p = Path(output_path)
@@ -167,17 +169,14 @@ def export_engine(
     workspace: int = 4,
 ) -> dict[str, Any]:
     """Export YOLO model to TensorRT engine (requires TensorRT + GPU)."""
-    try:
-        from ultralytics import YOLO
-    except ImportError:
-        return {"status": "blocked", "reason": "ultralytics not installed"}
+    blockers = missing_optional_blockers(["ultralytics", "torch"])
+    if blockers:
+        return blocked_payload(blockers)
 
-    try:
-        import torch
-        if not torch.cuda.is_available():
-            return {"status": "blocked", "reason": "CUDA not available for TensorRT export"}
-    except ImportError:
-        return {"status": "blocked", "reason": "torch not installed"}
+    import torch
+    from ultralytics import YOLO
+    if not torch.cuda.is_available():
+        return blocked_payload(["cuda_unavailable: TensorRT export requires CUDA"])
 
     model_p = Path(model_path)
     out_p = Path(output_path)
@@ -224,10 +223,11 @@ def validate_export(
 
     Runs same input through both models, asserts max absolute difference.
     """
-    try:
-        from ultralytics import YOLO
-    except ImportError:
-        return {"status": "blocked", "reason": "ultralytics not installed"}
+    blockers = missing_optional_blockers(["ultralytics"])
+    if blockers:
+        return blocked_payload(blockers)
+
+    from ultralytics import YOLO
 
     original = YOLO(str(original_model))
     exported = YOLO(str(exported_model))

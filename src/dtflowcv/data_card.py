@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from dtflowcv.config import write_json
+from dtflowcv.yolo import parse_yolo_label_file
 
 
 @dataclass
@@ -26,6 +26,7 @@ class DatasetCard:
     image_count: int = 0
     label_count: int = 0
     annotation_count: int = 0
+    invalid_label_count: int = 0
     class_distribution: dict[str, int] = field(default_factory=dict)
     split_stats: dict[str, int] = field(default_factory=dict)
     image_formats: list[str] = field(default_factory=list)
@@ -49,6 +50,7 @@ class DatasetCard:
                 "image_count": self.image_count,
                 "label_count": self.label_count,
                 "annotation_count": self.annotation_count,
+                "invalid_label_count": self.invalid_label_count,
                 "annotation_format": self.annotation_format,
                 "image_formats": self.image_formats,
             },
@@ -126,18 +128,18 @@ def build_dataset_card(
         all_labels = list(labels_dir.rglob("*.txt"))
 
     annotation_count = 0
+    invalid_label_count = 0
     class_dist: dict[str, int] = {name: 0 for name in class_names}
     for label_file in all_labels:
-        text = label_file.read_text(encoding="utf-8").strip()
-        if not text:
+        try:
+            boxes = parse_yolo_label_file(label_file)
+        except ValueError:
+            invalid_label_count += 1
             continue
-        for line in text.splitlines():
-            parts = line.strip().split()
-            if len(parts) >= 5:
-                annotation_count += 1
-                cid = int(parts[0])
-                if 0 <= cid < len(class_names):
-                    class_dist[class_names[cid]] += 1
+        for box in boxes:
+            annotation_count += 1
+            if 0 <= box.class_id < len(class_names):
+                class_dist[class_names[box.class_id]] += 1
 
     # Total size
     total_bytes = sum(f.stat().st_size for f in all_images) + sum(f.stat().st_size for f in all_labels)
@@ -160,6 +162,7 @@ def build_dataset_card(
         image_count=len(all_images),
         label_count=len(all_labels),
         annotation_count=annotation_count,
+        invalid_label_count=invalid_label_count,
         class_distribution=class_dist,
         image_formats=formats,
         total_size_bytes=total_bytes,
@@ -228,6 +231,7 @@ def _card_to_markdown(card: DatasetCard) -> str:
         f"- Images: {card.image_count}",
         f"- Labels: {card.label_count}",
         f"- Annotations: {card.annotation_count}",
+        f"- Invalid label files: {card.invalid_label_count}",
         f"- Format: {card.annotation_format}",
         f"- Image formats: {', '.join(card.image_formats)}",
         "",

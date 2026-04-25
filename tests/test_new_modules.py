@@ -1,10 +1,10 @@
 """Tests for tracking module — SORT tracker with Kalman filter."""
 from __future__ import annotations
 
-import numpy as np
-import pytest
+from pathlib import Path
 
-from dtflowcv.tracking import KalmanBoxTracker, MotionState, SORTTracker, Track, TrackStatus
+import numpy as np
+from dtflowcv.tracking import KalmanBoxTracker, MotionState, SORTTracker, TrackStatus
 
 
 class TestKalmanBoxTracker:
@@ -18,7 +18,7 @@ class TestKalmanBoxTracker:
     def test_predict_advances_state(self):
         bbox = np.array([10.0, 20.0, 50.0, 60.0])
         kbt = KalmanBoxTracker(bbox)
-        pred = kbt.predict()
+        kbt.predict()
         assert kbt.age == 1
         assert kbt.time_since_update == 1
 
@@ -57,6 +57,41 @@ class TestSORTTracker:
         # No detections
         tracks = tracker.update(np.empty((0, 4), dtype=np.float32))
         assert len(tracks) >= 1  # Track still alive (max_age=5)
+
+    def test_class_aware_tracking_does_not_match_different_class(self):
+        tracker = SORTTracker(min_hits=1, iou_threshold=0.1)
+        first = tracker.update(
+            np.array([[10, 20, 50, 60]], dtype=np.float32),
+            class_ids=np.array([0], dtype=np.int32),
+        )
+        first_id = first[0].track_id
+
+        second = tracker.update(
+            np.array([[10, 20, 50, 60]], dtype=np.float32),
+            class_ids=np.array([1], dtype=np.int32),
+        )
+
+        class_one_tracks = [track for track in second if track.class_id == 1]
+        assert class_one_tracks
+        assert all(track.track_id != first_id for track in class_one_tracks)
+
+    def test_track_confirmation_respects_min_hits(self):
+        tracker = SORTTracker(min_hits=2, iou_threshold=0.1)
+        tracks = tracker.update(np.array([[10, 20, 50, 60]], dtype=np.float32))
+        assert tracks[0].status == TrackStatus.TENTATIVE
+
+        tracks = tracker.update(np.array([[12, 22, 52, 62]], dtype=np.float32))
+        assert tracks[0].status == TrackStatus.CONFIRMED
+
+    def test_track_deletion_respects_max_age(self):
+        tracker = SORTTracker(min_hits=1, max_age=1)
+        tracker.update(np.array([[10, 20, 50, 60]], dtype=np.float32))
+
+        tracks = tracker.update(np.empty((0, 4), dtype=np.float32))
+        assert tracks[0].status == TrackStatus.LOST
+
+        tracks = tracker.update(np.empty((0, 4), dtype=np.float32))
+        assert tracks == []
 
     def test_motion_state_detection(self):
         tracker = SORTTracker(min_hits=1, motion_threshold=3.0)
@@ -144,6 +179,23 @@ class TestDataCard:
         assert Path(paths["markdown"]).exists()
         assert Path(paths["sha256"]).exists()
 
+    def test_dataset_card_survives_invalid_label_file(self, tmp_path):
+        from dtflowcv.data_card import build_dataset_card
+
+        img_dir = tmp_path / "images"
+        lbl_dir = tmp_path / "labels"
+        img_dir.mkdir()
+        lbl_dir.mkdir()
+
+        from PIL import Image
+        img = Image.new("RGB", (100, 100), (255, 0, 0))
+        img.save(img_dir / "bad.jpg")
+        (lbl_dir / "bad.txt").write_text("not_int 0.5 0.5 0.3 0.3\n", encoding="utf-8")
+
+        card = build_dataset_card(tmp_path, "dirty-dataset", ["person"])
+        assert card.annotation_count == 0
+        assert card.invalid_label_count == 1
+
     def test_verify_integrity(self, tmp_path):
         from dtflowcv.data_card import compute_dataset_hash, verify_dataset_integrity
 
@@ -170,8 +222,8 @@ class TestEnhancedMetrics:
         ]
         result = confusion_matrix(targets, predictions, 2, iou_threshold=0.3)
         matrix = result["matrix"]
-        assert len(matrix) == 3  # 2 classes + background
-        assert len(matrix[0]) == 3
+        assert len(matrix) == 4  # 2 classes + background + unknown
+        assert len(matrix[0]) == 4
 
     def test_per_class_detail_in_map(self):
         from dtflowcv.metrics import DetectionPrediction, DetectionTarget, map_at_iou
