@@ -1,0 +1,22 @@
+model:
+  family: yolo
+  checkpoint: yolov8n.pt
+  image_size: 640
+  pretrained: true
+
+training:
+  epochs: 1
+  device: cpu
+  batch: 2
+  workers: 0
+  seed: 1337
+
+augmentation: {}
+
+tracking:
+  backend: mlflow
+  tracking_uri: file:./mlruns
+  experiment_name: dtflowcv-coco-evidence
+  run_name_prefix: yolov8n-coco-road-cpu-1epoch
+  runs_dir: artifacts/ultralytics
+  run_dir_name: yolov8n-coco-road-cpu-1epoch

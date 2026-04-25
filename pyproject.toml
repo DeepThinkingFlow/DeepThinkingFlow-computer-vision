@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dtflow-cv"
+version = "0.1.0"
+description = "Computer-vision data science pipeline with dataset audit, baseline training, evaluation, profiling, and native preprocessing contracts."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "Pillow>=10",
+  "PyYAML>=6",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+train = [
+  "mlflow>=2.12",
+  "torch>=2.2",
+  "ultralytics>=8.2",
+]
+analysis = [
+  "opencv-python>=4.9",
+  "matplotlib>=3.8",
+  "pandas>=2.2",
+]
+native = [
+  "maturin>=1.7",
+]
+dev = [
+  "pytest>=8",
+]
+
+[project.scripts]
+dtflowcv = "dtflowcv.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

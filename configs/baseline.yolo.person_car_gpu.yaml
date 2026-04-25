@@ -1,0 +1,23 @@
+model:
+  family: yolo
+  checkpoint: yolov8n.pt
+  image_size: 640
+  pretrained: true
+
+training:
+  epochs: 100
+  device: 0
+  batch: 16
+  workers: 8
+  seed: 20260425
+  patience: 30
+
+augmentation: {}
+
+tracking:
+  backend: mlflow
+  tracking_uri: file:./mlruns
+  experiment_name: dtflowcv-coco-person-car-baseline
+  run_name_prefix: yolov8n-coco-person-car-gpu-100epoch
+  runs_dir: artifacts/ultralytics
+  run_dir_name: yolov8n-coco-person-car-gpu-100epoch

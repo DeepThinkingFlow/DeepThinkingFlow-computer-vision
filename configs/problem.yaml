@@ -1,0 +1,57 @@
+project:
+  name: dtflowcv-road-object-detection
+  owner: local
+  task_type: detection
+  claim_boundary: "Pipeline code is verified locally; trained-model quality is not claimed until a real benchmark run exists."
+
+phase_1:
+  input:
+    modality: image
+    color_space: RGB
+    dtype: uint8
+    average_resolution: "1280x720 production target, 640x640 training resize"
+    noise_profile: "Outdoor camera noise, motion blur, compression artifacts"
+    lighting: "Day, dusk, night, shadow, glare"
+    source: "Static images or frames extracted from video stream"
+  output:
+    type: bounding_box
+    training_format: "YOLO txt: class_id x_center y_center width height"
+    prediction_format: "YOLO txt: class_id x_center y_center width height confidence"
+    coordinate_system: "Normalized xywh in [0, 1]"
+  metrics:
+    primary: map50
+    secondary:
+      - map50_95
+      - class_ap50
+      - fps
+      - latency_p99_ms
+    acceptance:
+      map50_min: 0.50
+      latency_p99_ms_max: 50.0
+      fps_min: 20.0
+
+dataset:
+  public_benchmark:
+    name: COCO val2017 filtered road-scene classes
+    role: baseline_reference
+    note: "COCO8/COCO128 or synthetic data is allowed only for smoke tests."
+  annotation_schema:
+    min_box_area_ratio: 0.0001
+    occlusion_rule: "Keep visible object boxes if a human can identify the class."
+    ambiguous_rule: "Mark ambiguous objects for review; do not merge into training labels without QA."
+    qa_review_rate: 0.15
+  split:
+    train: 0.70
+    val: 0.15
+    test: 0.15
+    strategy: multilabel_stratified_by_class_presence
+
+classes:
+  - person
+  - bicycle
+  - car
+  - motorcycle
+  - bus
+  - truck
+  - traffic_light
+  - stop_sign
