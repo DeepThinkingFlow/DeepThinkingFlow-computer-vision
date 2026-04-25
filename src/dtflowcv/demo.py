@@ -5,7 +5,6 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-
 PALETTE = [
     (220, 38, 38),
     (37, 99, 235),
@@ -60,7 +59,7 @@ def create_demo_dataset(root: str | Path, class_names: list[str], image_count: i
                 min(max(yolo[3] * rng.uniform(0.96, 1.04), 0.001), 0.999),
             )
             confidence = 0.82 + rng.random() * 0.15
-            preds.append(_format_label(class_id, pred, confidence))
+            preds.append(_format_label(class_id, _clamp_yolo_box(pred), confidence))
 
         stem = f"demo_{idx:04d}"
         image.save(images_dir / f"{stem}.jpg", quality=90)
@@ -81,3 +80,12 @@ def _format_label(class_id: int, box: tuple[float, float, float, float], confide
     if confidence is not None:
         values.append(f"{confidence:.6f}")
     return " ".join(values)
+
+
+def _clamp_yolo_box(box: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    x_center, y_center, box_w, box_h = box
+    box_w = min(max(box_w, 0.001), 0.999)
+    box_h = min(max(box_h, 0.001), 0.999)
+    x_center = min(max(x_center, box_w / 2.0), 1.0 - box_w / 2.0)
+    y_center = min(max(y_center, box_h / 2.0), 1.0 - box_h / 2.0)
+    return x_center, y_center, box_w, box_h

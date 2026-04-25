@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 REQUIRED_PHASE1_INPUT = [
     "modality",
     "color_space",
@@ -45,20 +44,37 @@ def validate_problem_spec(spec: dict[str, Any]) -> list[str]:
     for key in ("map50_min", "latency_p99_ms_max", "fps_min"):
         if key not in acceptance:
             errors.append(f"phase_1.metrics.acceptance.{key} is required")
+        elif not _is_non_negative_number(acceptance[key]):
+            errors.append(f"phase_1.metrics.acceptance.{key} must be a non-negative number")
 
     classes = spec.get("classes", [])
     if not isinstance(classes, list) or not classes:
         errors.append("classes must be a non-empty list")
-    if len(classes) != len(set(classes)):
+    elif any(not isinstance(name, str) or not name.strip() for name in classes):
+        errors.append("classes must contain non-empty strings")
+    string_classes = isinstance(classes, list) and all(isinstance(name, str) for name in classes)
+    if string_classes and len(classes) != len(set(classes)):
         errors.append("classes must not contain duplicates")
 
     dataset = spec.get("dataset", {})
     if not dataset.get("public_benchmark", {}).get("name"):
         errors.append("dataset.public_benchmark.name is required")
     split = dataset.get("split", {})
-    split_sum = sum(float(split.get(name, 0.0)) for name in ("train", "val", "test"))
+    split_values: dict[str, float] = {}
+    for name in ("train", "val", "test"):
+        try:
+            split_values[name] = float(split.get(name, 0.0))
+        except (TypeError, ValueError):
+            errors.append(f"dataset.split.{name} must be numeric")
+            split_values[name] = 0.0
+        if split_values[name] < 0.0:
+            errors.append(f"dataset.split.{name} must be non-negative")
+    split_sum = sum(split_values.values())
     if abs(split_sum - 1.0) > 1e-6:
         errors.append("dataset.split train/val/test ratios must sum to 1.0")
+    min_area = dataset.get("annotation_schema", {}).get("min_box_area_ratio", 0.0)
+    if not _is_ratio(min_area):
+        errors.append("dataset.annotation_schema.min_box_area_ratio must be in [0, 1]")
 
     return errors
 
@@ -90,6 +106,19 @@ def _empty(value: Any) -> bool:
         return True
     if isinstance(value, str) and not value.strip():
         return True
-    if isinstance(value, (list, dict)) and not value:
-        return True
-    return False
+    return bool(isinstance(value, (list, dict)) and not value)
+
+
+def _is_non_negative_number(value: Any) -> bool:
+    try:
+        return float(value) >= 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_ratio(value: Any) -> bool:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return 0.0 <= number <= 1.0

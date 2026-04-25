@@ -5,12 +5,12 @@ import json
 from pathlib import Path
 
 import cv2
+import dtflowcv_native
 import numpy as np
 import torch
 from PIL import Image, ImageDraw
 from ultralytics import YOLO
 
-import dtflowcv_native
 from dtflowcv.config import load_yaml
 from dtflowcv.specs import class_names
 from dtflowcv.yolo import parse_yolo_label_file, yolo_to_xyxy
@@ -44,15 +44,37 @@ def main() -> None:
     image = Image.open(args.image).convert("RGB")
     draw = ImageDraw.Draw(image)
     for box in parse_yolo_label_file(args.label):
-        draw_box(draw, yolo_to_xyxy(box, original_width, original_height), (34, 197, 94), f"GT {safe_name(names, box.class_id)}")
+        draw_box(
+            draw,
+            yolo_to_xyxy(box, original_width, original_height),
+            (34, 197, 94),
+            f"GT {safe_name(names, box.class_id)}",
+        )
 
     predictions = []
     x_scale = original_width / args.size
     y_scale = original_height / args.size
-    for xyxy, cls, conf in zip(result.boxes.xyxy.cpu().numpy(), result.boxes.cls.cpu().numpy(), result.boxes.conf.cpu().numpy(), strict=False):
+    for xyxy, cls, conf in zip(
+        result.boxes.xyxy.cpu().numpy(),
+        result.boxes.cls.cpu().numpy(),
+        result.boxes.conf.cpu().numpy(),
+        strict=False,
+    ):
         class_id = int(cls)
-        scaled = (float(xyxy[0] * x_scale), float(xyxy[1] * y_scale), float(xyxy[2] * x_scale), float(xyxy[3] * y_scale))
-        predictions.append({"class_id": class_id, "class_name": safe_name(names, class_id), "confidence": float(conf), "xyxy": scaled})
+        scaled = (
+            float(xyxy[0] * x_scale),
+            float(xyxy[1] * y_scale),
+            float(xyxy[2] * x_scale),
+            float(xyxy[3] * y_scale),
+        )
+        predictions.append(
+            {
+                "class_id": class_id,
+                "class_name": safe_name(names, class_id),
+                "confidence": float(conf),
+                "xyxy": scaled,
+            }
+        )
         draw_box(draw, scaled, (239, 68, 68), f"P {safe_name(names, class_id)} {float(conf):.2f}")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -70,13 +92,21 @@ def main() -> None:
         "prediction_count": len(predictions),
         "predictions": predictions,
         "ground_truth_count": len(parse_yolo_label_file(args.label)),
-        "methodology_limit": "This verifies native RGB HWC u8 to CHW float 0..1 tensor inference alignment by visual overlay. It does not verify Ultralytics letterbox parity or ImageNet mean/std preprocessing.",
+        "methodology_limit": (
+            "This verifies native RGB HWC u8 to CHW float 0..1 tensor inference alignment by visual overlay. "
+            "It does not verify Ultralytics letterbox parity or ImageNet mean/std preprocessing."
+        ),
     }
     args.summary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
-def draw_box(draw: ImageDraw.ImageDraw, xyxy: tuple[float, float, float, float], color: tuple[int, int, int], label: str) -> None:
+def draw_box(
+    draw: ImageDraw.ImageDraw,
+    xyxy: tuple[float, float, float, float],
+    color: tuple[int, int, int],
+    label: str,
+) -> None:
     x1, y1, x2, y2 = xyxy
     draw.rectangle((x1, y1, x2, y2), outline=color, width=3)
     text_w = max(44, len(label) * 7)

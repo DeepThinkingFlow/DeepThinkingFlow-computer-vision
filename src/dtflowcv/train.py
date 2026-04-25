@@ -7,15 +7,19 @@ from pathlib import Path
 from typing import Any
 
 from dtflowcv.config import load_yaml
-from dtflowcv.specs import validate_problem_spec
+from dtflowcv.specs import class_names, validate_problem_spec
 
 
-def train_yolo_baseline(problem_path: str | Path, dataset_path: str | Path, train_config_path: str | Path) -> dict[str, Any]:
+def train_yolo_baseline(
+    problem_path: str | Path,
+    dataset_path: str | Path,
+    train_config_path: str | Path,
+) -> dict[str, Any]:
     problem = load_yaml(problem_path)
     config = load_yaml(train_config_path)
     errors = validate_problem_spec(problem)
     blockers = [f"invalid_problem_spec:{error}" for error in errors]
-    blockers.extend(_dataset_blockers(dataset_path))
+    blockers.extend(_dataset_blockers(dataset_path, expected_class_count=len(class_names(problem))))
     blockers.extend(_module_blockers())
     blockers.extend(_runtime_blockers(config))
     if blockers:
@@ -42,7 +46,7 @@ def train_yolo_baseline(problem_path: str | Path, dataset_path: str | Path, trai
                 "problem": str(problem_path),
                 "dataset": str(dataset_path),
                 "checkpoint": model_cfg.get("checkpoint", "yolov8n.pt"),
-                "torch_cuda_available": bool(getattr(ultralytics, "torch", None) and ultralytics.torch.cuda.is_available()),
+                "torch_cuda_available": _ultralytics_cuda_available(ultralytics),
                 **{f"train_{key}": value for key, value in training_cfg.items()},
                 **{f"aug_{key}": value for key, value in augmentation_cfg.items()},
             }
@@ -115,7 +119,7 @@ def _is_cpu_device(device: Any) -> bool:
     return str(device).strip().lower() == "cpu"
 
 
-def _dataset_blockers(dataset_path: str | Path) -> list[str]:
+def _dataset_blockers(dataset_path: str | Path, expected_class_count: int | None = None) -> list[str]:
     path = Path(dataset_path)
     if not path.exists():
         return [f"dataset_yaml_missing:{path}"]
@@ -140,10 +144,48 @@ def _dataset_blockers(dataset_path: str | Path) -> list[str]:
             split_path = root / split_path
         if not split_path.exists():
             blockers.append(f"dataset_{split}_path_missing:{split_path}")
+            continue
+        blockers.extend(_manifest_blockers(split, split_path))
     names = data.get("names")
-    if not isinstance(names, dict) or not names:
+    if not _valid_names_payload(names):
         blockers.append("dataset.names_missing")
+    elif expected_class_count is not None and _names_count(names) != expected_class_count:
+        blockers.append(f"dataset.names_count_mismatch:expected={expected_class_count}:actual={_names_count(names)}")
     return blockers
+
+
+def _manifest_blockers(split: str, path: Path) -> list[str]:
+    if path.suffix.lower() != ".txt":
+        return []
+    lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not lines:
+        return [f"dataset_{split}_manifest_empty:{path}"]
+    missing = [line for line in lines[:20] if not Path(line).exists()]
+    if missing:
+        return [f"dataset_{split}_manifest_missing_images:{len(missing)}_of_first_{min(len(lines), 20)}"]
+    return []
+
+
+def _valid_names_payload(names: Any) -> bool:
+    if isinstance(names, list):
+        return bool(names) and all(isinstance(name, str) and name.strip() for name in names)
+    if isinstance(names, dict):
+        return bool(names) and all(
+            str(key).strip() and isinstance(value, str) and value.strip()
+            for key, value in names.items()
+        )
+    return False
+
+
+def _names_count(names: Any) -> int:
+    if isinstance(names, (dict, list)):
+        return len(names)
+    return 0
+
+
+def _ultralytics_cuda_available(ultralytics: Any) -> bool:
+    torch_module = getattr(ultralytics, "torch", None)
+    return bool(torch_module and torch_module.cuda.is_available())
 
 
 def _extract_metrics(result: Any) -> dict[str, float]:

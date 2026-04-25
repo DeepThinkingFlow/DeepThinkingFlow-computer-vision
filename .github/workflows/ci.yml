@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: ["main", "master"]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: python -m pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check src tests scripts notebooks
+      - name: Compile
+        run: python -m compileall -q src tests scripts
+      - name: Test
+        run: python -m pytest -q
+      - name: Contract smoke
+        run: |
+          python -m dtflowcv check-spec configs/problem.yaml
+          python -m dtflowcv make-demo-dataset --out /tmp/dtflowcv-demo --images 8
+          python -m dtflowcv benchmark-yolo \
+            --images /tmp/dtflowcv-demo/images \
+            --labels /tmp/dtflowcv-demo/labels \
+            --preds /tmp/dtflowcv-demo/predictions \
+            --profile-iterations 1 \
+            --width 64 \
+            --height 64
+
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native Rust/C build contract
+        run: cargo test --manifest-path native/dtflowcv_native/Cargo.toml

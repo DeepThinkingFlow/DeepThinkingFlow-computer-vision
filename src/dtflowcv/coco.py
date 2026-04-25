@@ -47,42 +47,53 @@ def prepare_coco_yolo(
         if name in class_to_id
     }
     images_by_id = {int(image["id"]): image for image in images}
+
+    # Pre-index annotations by image_id
+    anns_by_image: dict[int, list[dict[str, Any]]] = {int(image["id"]): [] for image in images}
+    for annotation in annotations:
+        image_id = int(annotation["image_id"])
+        if image_id in anns_by_image:
+            anns_by_image[image_id].append(annotation)
+
     labels_by_image: dict[int, list[str]] = {int(image["id"]): [] for image in images}
     filtered_annotations_by_image: dict[int, list[dict[str, Any]]] = {int(image["id"]): [] for image in images}
     kept_by_class: Counter[int] = Counter()
-    ignored = Counter()
+    ignored: Counter[str] = Counter()
 
-    for annotation in annotations:
-        image_id = int(annotation["image_id"])
+    for image_id, image_anns in anns_by_image.items():
         image = images_by_id.get(image_id)
         if image is None:
-            ignored["missing_image"] += 1
             continue
-        category_id = int(annotation["category_id"])
-        class_id = category_to_class.get(category_id)
-        if class_id is None:
-            ignored["non_target_category"] += 1
-            continue
-        if int(annotation.get("iscrowd", 0)) and not include_crowd:
-            ignored["crowd"] += 1
-            continue
-        yolo = _coco_bbox_to_yolo(annotation.get("bbox", []), int(image["width"]), int(image["height"]))
-        if yolo is None:
-            ignored["invalid_bbox"] += 1
-            continue
-        if yolo[2] * yolo[3] < min_box_area_ratio:
-            ignored["too_small"] += 1
-            continue
-        labels_by_image[image_id].append(" ".join([str(class_id), *(f"{value:.6f}" for value in yolo)]))
-        filtered_annotation = dict(annotation)
-        filtered_annotation["category_id"] = class_id
-        filtered_annotations_by_image[image_id].append(filtered_annotation)
-        kept_by_class[class_id] += 1
+        img_w = int(image["width"])
+        img_h = int(image["height"])
+
+        for annotation in image_anns:
+            category_id = int(annotation["category_id"])
+            class_id = category_to_class.get(category_id)
+            if class_id is None:
+                ignored["non_target_category"] += 1
+                continue
+            if int(annotation.get("iscrowd", 0)) and not include_crowd:
+                ignored["crowd"] += 1
+                continue
+            yolo = _coco_bbox_to_yolo(annotation.get("bbox", []), img_w, img_h)
+            if yolo is None:
+                ignored["invalid_bbox"] += 1
+                continue
+            if yolo[2] * yolo[3] < min_box_area_ratio:
+                ignored["too_small"] += 1
+                continue
+            labels_by_image[image_id].append(" ".join([str(class_id), *(f"{value:.6f}" for value in yolo)]))
+            filtered_annotation = dict(annotation)
+            filtered_annotation["category_id"] = class_id
+            filtered_annotations_by_image[image_id].append(filtered_annotation)
+            kept_by_class[class_id] += 1
 
     linked_images = 0
     empty_images = 0
     written_images = 0
     kept_image_ids: set[int] = set()
+
     for image in images:
         image_id = int(image["id"])
         labels = labels_by_image.get(image_id, [])
@@ -112,21 +123,25 @@ def prepare_coco_yolo(
     }
     with (out_root / "dataset_all.yaml").open("w", encoding="utf-8") as fh:
         yaml.safe_dump(dataset_yaml, fh, sort_keys=False)
-    filtered_coco_path = out_root / "instances_filtered_road.json"
+
+    # Build filtered COCO JSON
+    kept_images = [dict(image) for image in images if int(image["id"]) in kept_image_ids]
+    kept_annotations = [
+        annotation
+        for image_id in sorted(kept_image_ids)
+        for annotation in filtered_annotations_by_image.get(image_id, [])
+    ]
     filtered_coco = {
         "info": payload.get("info", {}),
         "licenses": payload.get("licenses", []),
-        "images": [dict(image) for image in images if int(image["id"]) in kept_image_ids],
-        "annotations": [
-            annotation
-            for image_id in sorted(kept_image_ids)
-            for annotation in filtered_annotations_by_image.get(image_id, [])
-        ],
+        "images": kept_images,
+        "annotations": kept_annotations,
         "categories": [
             {"id": idx, "name": name, "supercategory": "road_object"}
             for idx, name in enumerate(class_names)
         ],
     }
+    filtered_coco_path = out_root / "instances_filtered_road.json"
     write_json(filtered_coco_path, filtered_coco)
 
     summary = {
@@ -173,7 +188,11 @@ def write_ultralytics_dataset_yaml(
         yaml.safe_dump(payload, fh, sort_keys=False)
 
 
-def _coco_bbox_to_yolo(bbox: list[Any], image_width: int, image_height: int) -> tuple[float, float, float, float] | None:
+def _coco_bbox_to_yolo(
+    bbox: list[Any],
+    image_width: int,
+    image_height: int,
+) -> tuple[float, float, float, float] | None:
     if len(bbox) != 4 or image_width <= 0 or image_height <= 0:
         return None
     x, y, width, height = (float(value) for value in bbox)
@@ -185,13 +204,15 @@ def _coco_bbox_to_yolo(bbox: list[Any], image_width: int, image_height: int) -> 
     clipped_height = y2 - y1
     if clipped_width <= 0.0 or clipped_height <= 0.0:
         return None
-    x_center = (x1 + x2) / 2.0 / image_width
-    y_center = (y1 + y2) / 2.0 / image_height
+    inv_w = 1.0 / image_width
+    inv_h = 1.0 / image_height
+    x_center = (x1 + x2) * 0.5 * inv_w
+    y_center = (y1 + y2) * 0.5 * inv_h
     return (
         min(max(x_center, 0.0), 1.0),
         min(max(y_center, 0.0), 1.0),
-        min(max(clipped_width / image_width, 0.0), 1.0),
-        min(max(clipped_height / image_height, 0.0), 1.0),
+        min(max(clipped_width * inv_w, 0.0), 1.0),
+        min(max(clipped_height * inv_h, 0.0), 1.0),
     )
 
 

@@ -11,7 +11,6 @@ from dtflowcv.config import load_yaml
 from dtflowcv.specs import class_names
 from dtflowcv.yolo import iter_images, parse_yolo_label_file, yolo_to_xyxy
 
-
 BOX_COLOR = (34, 197, 94)
 TEXT_BG = (15, 23, 42)
 TEXT_FG = (255, 255, 255)
@@ -55,13 +54,22 @@ def main() -> None:
                 "image": str(image_path),
                 "label": str(label_path),
                 "box_count": len(boxes),
-                "classes": sorted({names[box.class_id] if 0 <= box.class_id < len(names) else f"unknown_{box.class_id}" for box in boxes}),
+                "classes": sorted(
+                    {
+                        names[box.class_id] if 0 <= box.class_id < len(names) else f"unknown_{box.class_id}"
+                        for box in boxes
+                    }
+                ),
             }
         )
 
     for sheet_idx, start in enumerate(range(0, len(tiles), 10)):
-        make_sheet(tiles[start : start + 10], columns=2).save(args.out_dir / f"sheet_{sheet_idx:02d}.jpg", quality=90)
-    (args.out_dir / "review_items.json").write_text(json.dumps(review_items, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        sheet = make_sheet(tiles[start : start + 10], columns=2)
+        sheet.save(args.out_dir / f"sheet_{sheet_idx:02d}.jpg", quality=90)
+    (args.out_dir / "review_items.json").write_text(
+        json.dumps(review_items, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     print(json.dumps({"out_dir": str(args.out_dir), "reviewed_images": len(review_items)}, indent=2, sort_keys=True))
 
 

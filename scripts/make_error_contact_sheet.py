@@ -5,12 +5,11 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from dtflowcv.config import load_yaml
 from dtflowcv.specs import class_names
 from dtflowcv.yolo import parse_yolo_label_file, yolo_to_xyxy
-
 
 GT_COLOR = (34, 197, 94)
 PRED_COLOR = (239, 68, 68)
@@ -32,7 +31,11 @@ def main() -> None:
     names = class_names(load_yaml(args.problem))
     errors = json.loads(args.errors.read_text(encoding="utf-8"))
     examples = errors["examples"]
-    paths_by_id = {Path(line.strip()).stem: Path(line.strip()) for line in args.manifest.read_text(encoding="utf-8").splitlines() if line.strip()}
+    paths_by_id = {
+        Path(line.strip()).stem: Path(line.strip())
+        for line in args.manifest.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
 
     by_image: dict[str, list[dict]] = defaultdict(list)
     for example in examples:
@@ -44,7 +47,13 @@ def main() -> None:
     tiles = []
     for image_id in selected:
         image_path = paths_by_id[image_id]
-        tile = render_tile(image_path, args.labels / f"{image_id}.txt", args.preds / f"{image_id}.txt", names, by_image[image_id])
+        tile = render_tile(
+            image_path,
+            args.labels / f"{image_id}.txt",
+            args.preds / f"{image_id}.txt",
+            names,
+            by_image[image_id],
+        )
         tiles.append(tile)
         review_items.append(
             {
@@ -59,11 +68,20 @@ def main() -> None:
     for sheet_idx, start in enumerate(range(0, len(tiles), 10)):
         sheet = make_sheet(tiles[start : start + 10], columns=2)
         sheet.save(args.out_dir / f"sheet_{sheet_idx:02d}.jpg", quality=90)
-    (args.out_dir / "review_items.json").write_text(json.dumps(review_items, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (args.out_dir / "review_items.json").write_text(
+        json.dumps(review_items, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     print(json.dumps({"out_dir": str(args.out_dir), "reviewed_images": len(review_items)}, indent=2))
 
 
-def render_tile(image_path: Path, label_path: Path, pred_path: Path, names: list[str], errors: list[dict]) -> Image.Image:
+def render_tile(
+    image_path: Path,
+    label_path: Path,
+    pred_path: Path,
+    names: list[str],
+    errors: list[dict],
+) -> Image.Image:
     image = Image.open(image_path).convert("RGB")
     width, height = image.size
     scale = min(480 / width, 320 / height)
@@ -73,7 +91,11 @@ def render_tile(image_path: Path, label_path: Path, pred_path: Path, names: list
     for box in parse_yolo_label_file(label_path):
         draw_box(draw, yolo_to_xyxy(box, tile.width, tile.height), GT_COLOR, f"GT {safe_name(names, box.class_id)}")
     for box in parse_yolo_label_file(pred_path, with_confidence=True):
-        label = f"P {safe_name(names, box.class_id)} {box.confidence:.2f}" if box.confidence is not None else f"P {safe_name(names, box.class_id)}"
+        label = (
+            f"P {safe_name(names, box.class_id)} {box.confidence:.2f}"
+            if box.confidence is not None
+            else f"P {safe_name(names, box.class_id)}"
+        )
         draw_box(draw, yolo_to_xyxy(box, tile.width, tile.height), PRED_COLOR, label)
 
     header = Image.new("RGB", (tile.width, 56), (17, 24, 39))
@@ -87,7 +109,12 @@ def render_tile(image_path: Path, label_path: Path, pred_path: Path, names: list
     return out
 
 
-def draw_box(draw: ImageDraw.ImageDraw, xyxy: tuple[float, float, float, float], color: tuple[int, int, int], label: str) -> None:
+def draw_box(
+    draw: ImageDraw.ImageDraw,
+    xyxy: tuple[float, float, float, float],
+    color: tuple[int, int, int],
+    label: str,
+) -> None:
     x1, y1, x2, y2 = xyxy
     y1 += 56
     y2 += 56

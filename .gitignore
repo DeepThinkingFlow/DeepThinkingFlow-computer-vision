@@ -29,3 +29,8 @@ runs/
 !data/processed/.gitkeep
 !reports/.gitkeep
 !artifacts/.gitkeep
+
+# Hardware tools build artifacts
+tools/hwinfo/dtflowcv_hwguide
+tools/hwinfo/*.class
+bin/

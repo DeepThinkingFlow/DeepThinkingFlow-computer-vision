@@ -6,10 +6,8 @@ import timeit
 from pathlib import Path
 
 import cv2
-import numpy as np
-
 import dtflowcv_native
-
+import numpy as np
 
 MEAN = np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
 STD = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
