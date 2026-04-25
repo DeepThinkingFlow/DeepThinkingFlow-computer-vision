@@ -1,0 +1,47 @@
+# dtflowcv deployment configuration
+#
+# Target hardware and inference settings for production deployment.
+
+inference:
+  device: cpu                    # cpu, cuda:0, mps
+  model_format: onnx             # pt, onnx, torchscript, engine
+  model_path: artifacts/models/best.onnx
+  input_size: 640
+  confidence: 0.25
+  nms_iou: 0.45
+  half_precision: false
+  batch_size: 1
+  max_detections: 100
+
+tracking:
+  enabled: true
+  max_age: 30                    # Frames before deleting lost track
+  min_hits: 3                    # Hits before track is confirmed
+  iou_threshold: 0.3             # Min IoU for track-detection matching
+  motion_threshold: 5.0          # Pixel displacement for motion detection
+
+video:
+  source: ""                     # File path, RTSP URL, or webcam device ID
+  output_path: artifacts/output.mp4
+  output_fps: 30.0
+  sample_fps: null               # null = use native FPS
+  codec: mp4v
+  resize: null                   # null or [width, height]
+
+zones:
+  - name: "entrance"
+    type: line
+    points: [[100, 400], [700, 400]]
+  - name: "parking"
+    type: polygon
+    points: [[200, 200], [600, 200], [600, 500], [200, 500]]
+
+logging:
+  per_frame_json: true
+  output_json: artifacts/inference_log.json
+  save_annotated_frames: false
+  annotated_frames_dir: artifacts/annotated_frames
+
+alerts:
+  max_objects_per_frame: 50      # Alert if exceeded
+  min_fps: 10                    # Alert if FPS drops below

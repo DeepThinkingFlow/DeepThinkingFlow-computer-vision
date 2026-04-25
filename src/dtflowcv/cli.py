@@ -30,13 +30,15 @@ app = typer.Typer(no_args_is_help=True)
 
 
 def _emit(payload: dict | list) -> None:
-    typer.echo(json.dumps(payload, sort_keys=True))
+    typer.echo(json.dumps(payload, sort_keys=True, default=str))
 
 
 def _exit_with_errors(errors: list[str], status: str = "failed", code: int = 1) -> None:
     _emit({"status": status, "errors": errors})
     raise typer.Exit(code)
 
+
+# ── Existing Commands ────────────────────────────────────────
 
 @app.command("check-spec")
 def check_spec(problem: Path = typer.Argument(..., help="Problem YAML path")) -> None:
@@ -131,7 +133,8 @@ def evaluate_yolo_cmd(
     errors = validate_problem_spec(spec)
     if errors:
         _exit_with_errors(errors)
-    result = evaluate_yolo_predictions(images, labels, preds, len(class_names(spec)), iou_threshold=iou)
+    names = class_names(spec)
+    result = evaluate_yolo_predictions(images, labels, preds, len(names), iou_threshold=iou, class_names=names)
     if out:
         write_json(out, result)
     _emit(result)
@@ -152,15 +155,9 @@ def benchmark_yolo_cmd(
     max_images: int | None = typer.Option(None, min=1, help="Optional image limit"),
 ) -> None:
     result = benchmark_yolo_pipeline(
-        images,
-        labels,
-        preds,
-        problem,
-        iou_threshold=iou,
-        profile_iterations=profile_iterations,
-        profile_size=(width, height),
-        image_manifest=manifest,
-        max_images=max_images,
+        images, labels, preds, problem,
+        iou_threshold=iou, profile_iterations=profile_iterations,
+        profile_size=(width, height), image_manifest=manifest, max_images=max_images,
     )
     if out:
         write_json(out, result)
@@ -177,18 +174,12 @@ def predict_yolo_cmd(
     out: Path = typer.Option(Path("artifacts/predictions"), help="Prediction output directory"),
     conf: float = typer.Option(0.001, min=0.0, max=1.0, help="Prediction confidence threshold"),
     iou: float = typer.Option(0.7, min=0.0, max=1.0, help="NMS IoU threshold"),
-    device: str | None = typer.Option(None, help="Optional Ultralytics device, for example cpu or 0"),
+    device: str | None = typer.Option(None, help="Optional Ultralytics device"),
     max_images: int | None = typer.Option(None, min=1, help="Optional image limit"),
 ) -> None:
     result = predict_ultralytics_yolo(
-        images,
-        problem,
-        model_path=model,
-        out_dir=out,
-        conf=conf,
-        iou=iou,
-        device=device,
-        max_images=max_images,
+        images, problem, model_path=model, out_dir=out,
+        conf=conf, iou=iou, device=device, max_images=max_images,
     )
     _emit(result)
     if result["status"] != "ok":
@@ -202,16 +193,11 @@ def profile_preprocess_cmd(
     width: int = typer.Option(640, min=1, help="Resize width"),
     height: int = typer.Option(640, min=1, help="Resize height"),
     out: Path | None = typer.Option(None, help="Optional profile JSON output"),
-    manifest: Path | None = typer.Option(None, help="Optional image manifest to restrict profiling"),
+    manifest: Path | None = typer.Option(None, help="Optional image manifest"),
     max_images: int | None = typer.Option(None, min=1, help="Optional image limit"),
 ) -> None:
-    result = profile_preprocess(
-        images,
-        iterations=iterations,
-        size=(width, height),
-        image_manifest=manifest,
-        max_images=max_images,
-    )
+    result = profile_preprocess(images, iterations=iterations, size=(width, height),
+                                image_manifest=manifest, max_images=max_images)
     if out:
         write_json(out, result)
     _emit(result)
@@ -225,7 +211,7 @@ def export_errors_cmd(
     problem: Path = typer.Option(Path("configs/problem.yaml"), help="Problem YAML path"),
     out: Path = typer.Option(Path("reports/errors.json"), help="Output error JSON"),
     iou: float = typer.Option(0.5, help="IoU threshold"),
-    manifest: Path | None = typer.Option(None, help="Optional image manifest to restrict evaluation"),
+    manifest: Path | None = typer.Option(None, help="Optional image manifest"),
 ) -> None:
     spec = load_yaml(problem)
     errors = validate_problem_spec(spec)
@@ -233,13 +219,8 @@ def export_errors_cmd(
         _exit_with_errors(errors)
     min_area = float(spec.get("dataset", {}).get("annotation_schema", {}).get("min_box_area_ratio", 0.0001))
     result = export_detection_errors(
-        images,
-        labels,
-        preds,
-        class_names(spec),
-        iou_threshold=iou,
-        small_area_ratio=min_area,
-        image_manifest=manifest,
+        images, labels, preds, class_names(spec),
+        iou_threshold=iou, small_area_ratio=min_area, image_manifest=manifest,
     )
     write_json(out, result)
     _emit({"status": "ok", "out": str(out), "summary": result["by_kind"]})
@@ -264,7 +245,7 @@ def doctor_cmd(
 
 @app.command("prepare-coco")
 def prepare_coco_cmd(
-    images: Path = typer.Option(..., help="COCO images directory, for example val2017"),
+    images: Path = typer.Option(..., help="COCO images directory"),
     annotations: Path = typer.Option(..., help="COCO instances JSON path"),
     out: Path = typer.Option(Path("data/coco_road_yolo"), help="Output YOLO dataset root"),
     problem: Path = typer.Option(Path("configs/problem.yaml"), help="Problem YAML path"),
@@ -277,13 +258,8 @@ def prepare_coco_cmd(
         _exit_with_errors(errors)
     min_area = float(spec.get("dataset", {}).get("annotation_schema", {}).get("min_box_area_ratio", 0.0))
     summary = prepare_coco_yolo(
-        images,
-        annotations,
-        out,
-        class_names(spec),
-        include_empty=include_empty,
-        include_crowd=include_crowd,
-        min_box_area_ratio=min_area,
+        images, annotations, out, class_names(spec),
+        include_empty=include_empty, include_crowd=include_crowd, min_box_area_ratio=min_area,
     )
     _emit({"status": "ok", "summary": summary})
 
@@ -310,6 +286,146 @@ def hwinfo_cmd(
     out.parent.mkdir(parents=True, exist_ok=True)
     write_json(out, report)
     _emit(report)
+
+
+# ── New Commands ─────────────────────────────────────────────
+
+@app.command("visualize-errors")
+def visualize_errors_cmd(
+    images: Path = typer.Option(..., help="Image directory"),
+    labels: Path = typer.Option(..., help="Ground-truth labels directory"),
+    preds: Path = typer.Option(..., help="Prediction labels directory"),
+    problem: Path = typer.Option(Path("configs/problem.yaml"), help="Problem YAML path"),
+    out: Path = typer.Option(Path("reports/visual_errors"), help="Output directory"),
+    iou: float = typer.Option(0.5, help="IoU threshold"),
+    max_images: int | None = typer.Option(None, min=1, help="Optional image limit"),
+) -> None:
+    from dtflowcv.visualize import save_annotated_errors
+    spec = load_yaml(problem)
+    result = save_annotated_errors(images, labels, preds, out, class_names(spec),
+                                   iou_threshold=iou, max_images=max_images)
+    _emit({"status": "ok", **result})
+
+
+@app.command("error-grid")
+def error_grid_cmd(
+    images: Path = typer.Option(..., help="Image directory"),
+    labels: Path = typer.Option(..., help="Ground-truth labels directory"),
+    preds: Path = typer.Option(..., help="Prediction labels directory"),
+    problem: Path = typer.Option(Path("configs/problem.yaml"), help="Problem YAML path"),
+    out: Path = typer.Option(Path("reports/error_grid.jpg"), help="Output grid image"),
+) -> None:
+    from dtflowcv.visualize import make_error_grid
+    spec = load_yaml(problem)
+    result = make_error_grid(images, labels, preds, out, class_names(spec))
+    _emit({"status": "ok", **result})
+
+
+@app.command("infer-video")
+def infer_video_cmd(
+    source: str = typer.Option(..., help="Video file, RTSP URL, or device ID"),
+    problem: Path = typer.Option(Path("configs/problem.yaml"), help="Problem YAML path"),
+    model: Path = typer.Option(Path("yolov8n.pt"), help="YOLO checkpoint"),
+    out_video: Path | None = typer.Option(None, help="Output annotated video"),
+    out_json: Path | None = typer.Option(None, help="Output per-frame JSON"),
+    conf: float = typer.Option(0.25, help="Detection confidence"),
+    iou: float = typer.Option(0.45, help="NMS IoU"),
+    tracking: bool = typer.Option(True, help="Enable tracking"),
+    max_frames: int | None = typer.Option(None, min=1, help="Max frames"),
+    sample_fps: float | None = typer.Option(None, help="Sample FPS"),
+) -> None:
+    from dtflowcv.infer import infer_video
+    result = infer_video(
+        source, problem, model_path=model,
+        output_video=out_video, output_json=out_json,
+        conf=conf, iou=iou, enable_tracking=tracking,
+        max_frames=max_frames, sample_fps=sample_fps,
+    )
+    _emit(result)
+    if result.get("status") != "ok":
+        raise typer.Exit(2)
+
+
+@app.command("infer-images")
+def infer_images_cmd(
+    images: Path = typer.Option(..., help="Image directory"),
+    problem: Path = typer.Option(Path("configs/problem.yaml"), help="Problem YAML path"),
+    model: Path = typer.Option(Path("yolov8n.pt"), help="YOLO checkpoint"),
+    out: Path = typer.Option(Path("artifacts/annotated"), help="Annotated output dir"),
+    conf: float = typer.Option(0.25, help="Detection confidence"),
+    max_images: int | None = typer.Option(None, min=1, help="Max images"),
+) -> None:
+    from dtflowcv.infer import infer_images
+    result = infer_images(images, problem, model_path=model, output_dir=out,
+                          conf=conf, max_images=max_images)
+    _emit(result)
+
+
+@app.command("extract-frames")
+def extract_frames_cmd(
+    source: str = typer.Option(..., help="Video file path"),
+    out: Path = typer.Option(Path("data/frames"), help="Output frame directory"),
+    sample_fps: float | None = typer.Option(None, help="Sample FPS (null=native)"),
+    max_frames: int | None = typer.Option(None, min=1, help="Max frames"),
+    format: str = typer.Option("jpg", help="Image format"),
+) -> None:
+    from dtflowcv.video import extract_frames
+    result = extract_frames(source, out, sample_fps=sample_fps, max_frames=max_frames, format=format)
+    _emit({"status": "ok", **result})
+
+
+@app.command("export-model")
+def export_model_cmd(
+    model: Path = typer.Option(..., help="YOLO .pt checkpoint"),
+    out: Path = typer.Option(Path("artifacts/models/best.onnx"), help="Output path"),
+    format: str = typer.Option("onnx", help="Export format: onnx, torchscript, engine"),
+    input_size: int = typer.Option(640, help="Input image size"),
+    half: bool = typer.Option(False, help="FP16 export"),
+) -> None:
+    from dtflowcv.export import export_engine, export_onnx, export_torchscript
+    if format == "onnx":
+        result = export_onnx(model, out, input_size=input_size, half=half)
+    elif format == "torchscript":
+        result = export_torchscript(model, out, input_size=input_size, half=half)
+    elif format == "engine":
+        result = export_engine(model, out, input_size=input_size, half=half)
+    else:
+        _emit({"status": "failed", "reason": f"Unknown format: {format}"})
+        raise typer.Exit(2)
+    _emit(result)
+    if result.get("status") != "ok":
+        raise typer.Exit(2)
+
+
+@app.command("dataset-card")
+def dataset_card_cmd(
+    dataset: Path = typer.Argument(..., help="Dataset root directory"),
+    problem: Path = typer.Option(Path("configs/problem.yaml"), help="Problem YAML path"),
+    out: Path = typer.Option(Path("reports/dataset_card"), help="Output directory"),
+    name: str = typer.Option("dtflowcv-dataset", help="Dataset name"),
+    verify: str | None = typer.Option(None, help="Expected SHA-256 to verify against"),
+) -> None:
+    from dtflowcv.data_card import build_dataset_card, verify_dataset_integrity, write_dataset_card
+    spec = load_yaml(problem)
+    names = class_names(spec)
+    if verify:
+        result = verify_dataset_integrity(dataset, verify)
+        _emit(result)
+        if not result["verified"]:
+            raise typer.Exit(2)
+    else:
+        card = build_dataset_card(dataset, name, names)
+        paths = write_dataset_card(card, out)
+        _emit({"status": "ok", **paths, "sha256": card.sha256})
+
+
+@app.command("env-check")
+def env_check_cmd() -> None:
+    from dtflowcv.deploy import environment_check
+    result = environment_check()
+    _emit(result)
+    if not result["ready"]:
+        raise typer.Exit(2)
 
 
 def _cap_records(records: list, cap: int | None) -> list:

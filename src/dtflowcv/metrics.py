@@ -76,6 +76,7 @@ def map_at_iou(
     iou_threshold: float = 0.5,
 ) -> dict[str, object]:
     per_class: dict[int, float | None] = {}
+    per_class_detail: dict[int, dict[str, object]] = {}
     false_positive_count = 0
     false_negative_count = 0
 
@@ -92,10 +93,15 @@ def map_at_iou(
         class_predictions = sorted(predictions_by_class[class_id], key=lambda item: item.score, reverse=True)
         if not class_targets:
             per_class[class_id] = None
+            per_class_detail[class_id] = {
+                "ap": None, "precision": 0.0, "recall": 0.0, "f1": 0.0,
+                "tp": 0, "fp": len(class_predictions), "fn": 0,
+                "target_count": 0, "prediction_count": len(class_predictions),
+            }
             false_positive_count += len(class_predictions)
             continue
 
-        # Index targets by image_id for O(1) lookup instead of linear scan
+        # Index targets by image_id for O(1) lookup
         targets_by_image: dict[str, list[tuple[int, DetectionTarget]]] = defaultdict(list)
         for idx, target in enumerate(class_targets):
             targets_by_image[target.image_id].append((idx, target))
@@ -108,13 +114,12 @@ def map_at_iou(
         for pred_idx, prediction in enumerate(class_predictions):
             best_index = -1
             best_iou = 0.0
-            # Only check targets from same image
             for index, target in targets_by_image.get(prediction.image_id, []):
                 if index in matched:
                     continue
-                iou = box_iou(target.box_xyxy, prediction.box_xyxy)
-                if iou > best_iou:
-                    best_iou = iou
+                iou_val = box_iou(target.box_xyxy, prediction.box_xyxy)
+                if iou_val > best_iou:
+                    best_iou = iou_val
                     best_index = index
             if best_iou >= iou_threshold and best_index >= 0:
                 matched.add(best_index)
@@ -122,20 +127,180 @@ def map_at_iou(
             else:
                 fp[pred_idx] = 1
 
-        false_positive_count += int(np.sum(fp))
-        false_negative_count += max(len(class_targets) - len(matched), 0)
-        per_class[class_id] = _average_precision_np(tp, fp, len(class_targets))
+        class_tp = int(np.sum(tp))
+        class_fp = int(np.sum(fp))
+        class_fn = max(len(class_targets) - len(matched), 0)
+
+        false_positive_count += class_fp
+        false_negative_count += class_fn
+
+        ap = _average_precision_np(tp, fp, len(class_targets))
+        per_class[class_id] = ap
+
+        # Precision, recall, F1
+        precision = class_tp / max(class_tp + class_fp, 1)
+        recall = class_tp / max(class_tp + class_fn, 1)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-8)
+
+        per_class_detail[class_id] = {
+            "ap": ap,
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "f1": round(f1, 4),
+            "tp": class_tp,
+            "fp": class_fp,
+            "fn": class_fn,
+            "target_count": len(class_targets),
+            "prediction_count": len(class_predictions),
+        }
 
     valid_ap = [ap for ap in per_class.values() if ap is not None]
     map_value = float(np.mean(valid_ap)) if valid_ap else 0.0
+
+    # Rank classes by AP (hardest first)
+    hardest = sorted(
+        [(cid, detail) for cid, detail in per_class_detail.items() if detail["ap"] is not None],
+        key=lambda x: x[1]["ap"],
+    )
+
     return {
         "map": map_value,
         "iou_threshold": iou_threshold,
         "class_ap": {str(class_id): ap for class_id, ap in per_class.items()},
+        "class_detail": {str(class_id): detail for class_id, detail in per_class_detail.items()},
+        "hardest_classes": [{"class_id": cid, **d} for cid, d in hardest[:5]],
         "false_positives": false_positive_count,
         "false_negatives": false_negative_count,
         "target_count": len(targets),
         "prediction_count": len(predictions),
+    }
+
+
+def confusion_matrix(
+    targets: list[DetectionTarget],
+    predictions: list[DetectionPrediction],
+    class_count: int,
+    iou_threshold: float = 0.5,
+) -> dict[str, object]:
+    """Build NxN confusion matrix + background row/column.
+
+    Matrix[i][j] = count of GT class i predicted as class j.
+    Matrix[i][class_count] = GT class i missed (FN).
+    Matrix[class_count][j] = FP predicted as class j with no GT match.
+    """
+    # (class_count+1) x (class_count+1) — last row/col = background
+    n = class_count + 1
+    matrix = np.zeros((n, n), dtype=np.int32)
+
+    # Group by image
+    targets_by_image: dict[str, list[tuple[int, DetectionTarget]]] = defaultdict(list)
+    preds_by_image: dict[str, list[DetectionPrediction]] = defaultdict(list)
+    for idx, t in enumerate(targets):
+        targets_by_image[t.image_id].append((idx, t))
+    for p in predictions:
+        preds_by_image[p.image_id].append(p)
+
+    all_image_ids = set(targets_by_image.keys()) | set(preds_by_image.keys())
+
+    for image_id in all_image_ids:
+        img_targets = targets_by_image.get(image_id, [])
+        img_preds = sorted(preds_by_image.get(image_id, []), key=lambda p: p.score, reverse=True)
+
+        matched_gt: set[int] = set()
+
+        for pred in img_preds:
+            best_idx = -1
+            best_iou = 0.0
+            for idx, gt in img_targets:
+                if idx in matched_gt:
+                    continue
+                iou_val = box_iou(gt.box_xyxy, pred.box_xyxy)
+                if iou_val > best_iou:
+                    best_iou = iou_val
+                    best_idx = idx
+
+            if best_iou >= iou_threshold and best_idx >= 0:
+                gt_class = img_targets[[i for i, (idx, _) in enumerate(img_targets) if idx == best_idx][0]][1].class_id
+                matched_gt.add(best_idx)
+                # GT=gt_class, Pred=pred.class_id
+                matrix[gt_class][pred.class_id] += 1
+            else:
+                # FP: no GT match → background row
+                matrix[class_count][pred.class_id] += 1
+
+        # Unmatched GTs → FN (predicted as background)
+        for idx, gt in img_targets:
+            if idx not in matched_gt:
+                matrix[gt.class_id][class_count] += 1
+
+    return {
+        "matrix": matrix.tolist(),
+        "size": n,
+        "class_count": class_count,
+        "note": "matrix[i][j] = GT class i predicted as class j. Last row/col = background.",
+    }
+
+
+def precision_recall_curve(
+    targets: list[DetectionTarget],
+    predictions: list[DetectionPrediction],
+    class_id: int,
+    iou_threshold: float = 0.5,
+    n_points: int = 101,
+) -> dict[str, object]:
+    """Compute precision-recall curve for a single class.
+
+    Returns sampled at n_points recall levels.
+    """
+    class_targets = [t for t in targets if t.class_id == class_id]
+    class_preds = sorted([p for p in predictions if p.class_id == class_id], key=lambda p: p.score, reverse=True)
+
+    if not class_targets:
+        return {"recall": [], "precision": [], "class_id": class_id, "target_count": 0}
+
+    targets_by_image: dict[str, list[tuple[int, DetectionTarget]]] = defaultdict(list)
+    for idx, t in enumerate(class_targets):
+        targets_by_image[t.image_id].append((idx, t))
+
+    matched: set[int] = set()
+    tp_arr = np.zeros(len(class_preds), dtype=np.int32)
+    fp_arr = np.zeros(len(class_preds), dtype=np.int32)
+
+    for pi, pred in enumerate(class_preds):
+        best_idx = -1
+        best_iou = 0.0
+        for idx, t in targets_by_image.get(pred.image_id, []):
+            if idx in matched:
+                continue
+            iou_val = box_iou(t.box_xyxy, pred.box_xyxy)
+            if iou_val > best_iou:
+                best_iou = iou_val
+                best_idx = idx
+        if best_iou >= iou_threshold and best_idx >= 0:
+            matched.add(best_idx)
+            tp_arr[pi] = 1
+        else:
+            fp_arr[pi] = 1
+
+    cum_tp = np.cumsum(tp_arr)
+    cum_fp = np.cumsum(fp_arr)
+    recalls = cum_tp / len(class_targets)
+    precisions = cum_tp / (cum_tp + cum_fp)
+
+    # Interpolate at n_points
+    recall_levels = np.linspace(0, 1, n_points)
+    interp_precision = np.zeros(n_points)
+    for i, r in enumerate(recall_levels):
+        mask = recalls >= r
+        if mask.any():
+            interp_precision[i] = float(np.max(precisions[mask]))
+
+    return {
+        "recall": recall_levels.tolist(),
+        "precision": interp_precision.tolist(),
+        "class_id": class_id,
+        "target_count": len(class_targets),
+        "prediction_count": len(class_preds),
     }
 
 
