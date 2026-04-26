@@ -22,12 +22,17 @@ artifacts/*
 mlruns/
 runs/
 *.pt
+*.pth
 *.onnx
 *.engine
+*.safetensors
+*.torchscript
 
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !reports/.gitkeep
+!reports/benchmarks/
+!reports/benchmarks/README.md
 !artifacts/.gitkeep
 
 # Hardware tools build artifacts

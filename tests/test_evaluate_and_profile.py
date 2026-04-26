@@ -15,6 +15,9 @@ def test_evaluate_demo_predictions(tmp_path: Path) -> None:
     assert result["target_count"] > 0
     assert result["prediction_count"] == result["target_count"]
     assert result["map"] > 0.9
+    assert result["map50_95"] > 0.7
+    assert result["map75"] > 0.8
+    assert "coco_metrics" in result
 
 
 def test_evaluate_reports_out_of_schema_classes_without_crashing(tmp_path: Path) -> None:

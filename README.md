@@ -2,6 +2,17 @@
 
 This repo is a computer-vision pipeline for object detection. It is not a trained model and it is not production-ready by README claim alone. The verified core surface is package code for problem-spec validation, synthetic smoke data, strict YOLO parsing, dataset audit, split manifests, prediction-file evaluation, error export, preprocessing profiling, dependency-gated training, and native build contracts.
 
+## License And Vendor Boundary
+
+The core project is licensed under Apache-2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE),
+[LICENSE_POLICY.md](LICENSE_POLICY.md), and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+No third-party source code is currently vendored. Vendoring is governed by
+[VENDOR_POLICY.md](VENDOR_POLICY.md) and [third_party/MANIFEST.json](third_party/MANIFEST.json).
+Do not vendor Ultralytics, Torch, OpenCV, ONNXRuntime, NumPy, Pandas, Matplotlib, or MLflow into this
+repo. Optional Ultralytics integration remains dependency-based and may carry AGPL-3.0 obligations unless
+covered by an upstream enterprise license.
+
 ## Problem Contract
 
 Default task: road-scene object detection on RGB images.
@@ -16,18 +27,23 @@ The source contract is [configs/problem.yaml](configs/problem.yaml).
 
 ## Architecture
 
-- `dtflowcv.specs`: validates the problem contract before pipeline commands run.
-- `dtflowcv.yolo`: strict YOLO parsing, normalized box validation, and nested image/label path resolution.
-- `dtflowcv.dataset`: image record loading, label health audit, duplicate/leakage checks, reports, and split manifests.
-- `dtflowcv.evaluate` and `dtflowcv.metrics`: mAP and confusion matrix with explicit unknown-class handling.
-- `dtflowcv.errors`: false positive, false negative, duplicate, and class-confusion export.
-- `dtflowcv.predict`: Ultralytics checkpoint predictions mapped into the project class schema.
-- `dtflowcv.benchmark`: prediction-file benchmark plus preprocessing profile; not full model inference.
-- `dtflowcv.inference_benchmark`: full runtime command for checkpoint inference latency/FPS.
-- `dtflowcv.train`: dependency-gated Ultralytics/MLflow baseline training.
-- `dtflowcv.infer`, `dtflowcv.video`, `dtflowcv.tracking`: optional image/video inference and class-aware tracking.
-- `dtflowcv.health`: machine-readable doctor report.
+- `dtflowcv.commands`: Typer CLI implementation; `dtflowcv.cli` is a compatibility shim.
+- `dtflowcv.core`: config, JSON IO, dependency gates, hashing, and schema helpers.
+- `dtflowcv.data`: YOLO/COCO ingestion, audit, split, dataset card, and registry boundaries.
+- `dtflowcv.evaluation`: IoU, AP, COCO-style AP/AR, confusion matrix, PR curves, and report adapters.
+- `dtflowcv.models`: prediction, training, export, export validation, model card, and registry boundaries.
+- `dtflowcv.models.backend`: backend protocol for dependency-managed inference adapters.
+- `dtflowcv.models.backends.ultralytics`: optional Ultralytics adapter; no upstream source is copied.
+- `dtflowcv.models.backends.onnxruntime`: ONNXRuntime adapter skeleton with blocked behavior when missing.
+- `dtflowcv.models.backends.torchscript`: TorchScript load-path skeleton; postprocess parity is not claimed.
+- `dtflowcv.models.registry`: local model metadata registry; it stores hashes and paths, not model weights.
+- `dtflowcv.runtime`: image/video inference, video IO, tracking, visualization, preprocessing, and native status.
+- `dtflowcv.reports`: benchmark, dataset-card, and model-card evidence adapters.
+- `dtflowcv.serving`: reserved namespace; no serving API is claimed yet.
 - [native/dtflowcv_native](native/dtflowcv_native): optional Rust/C extension.
+
+Detailed boundaries are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
+[docs/REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md).
 
 ## Claim Boundaries
 
@@ -41,7 +57,7 @@ The source contract is [configs/problem.yaml](configs/problem.yaml).
 | Visualization and frame extraction | Yes | `viz`/`video` extras |
 | Image/video YOLO inference | Blocked contract only in core CI | Requires `ultralytics` plus video/runtime deps |
 | Native Rust/C source | Cargo test only | `maturin develop` must be run before Python-native claims |
-| Full inference latency/FPS | Command exists, not core-smoked | Requires `train` runtime and a checkpoint |
+| Full inference latency/FPS | Scheduled/manual heavy workflow | Requires `train` runtime and a checkpoint |
 | Model quality | No | Needs locked real benchmark predictions and accepted metrics |
 
 ## Install
@@ -61,6 +77,31 @@ python -m pip install -e ".[native]" -c constraints-native.txt
 
 Missing optional dependencies must return compact JSON with `status: blocked` and `build_blockers`; public CLI commands should not expose raw `ModuleNotFoundError` stacktraces.
 
+## Governance Checks
+
+```bash
+PYTHONPATH=src python -m dtflowcv vendor-check
+PYTHONPATH=src python -m dtflowcv license-check
+PYTHONPATH=src python -m dtflowcv dependency-check
+```
+
+`license-check` and `vendor-check` are CI-guarded. They enforce the Apache-2.0 project license files,
+the third-party manifest contract, forbidden-license denylist rules, and the no-tracked-model-artifact rule.
+
+Model artifacts are intentionally ignored by git: `*.pt`, `*.pth`, `*.onnx`, `*.engine`, `*.safetensors`,
+and `*.torchscript` must not be committed. Register existing local artifacts with:
+
+```bash
+PYTHONPATH=src python -m dtflowcv model-register \
+  --name road-smoke \
+  --version 0.1.0 \
+  --path artifacts/models/road-smoke/model.onnx \
+  --license Apache-2.0 \
+  --source local
+```
+
+`model-download` never fetches network URLs. It only stages local files after explicit `--accept-license`.
+
 ## Core Smoke
 
 ```bash
@@ -76,7 +117,7 @@ PYTHONPATH=src python -m dtflowcv dataset-card data/demo --problem configs/probl
 
 ## Benchmarking
 
-`benchmark-yolo` evaluates existing prediction label files and separately profiles preprocessing. It does not measure model forward pass, NMS, device transfer, or end-to-end runtime latency.
+`benchmark-yolo` evaluates existing prediction label files and separately profiles preprocessing. It reports AP50 plus internal COCO-style AP/AR fields such as `map50_95`, `map75`, `ap_small`, `ap_medium`, `ap_large`, `ar_1`, `ar_10`, and `ar_100`. It does not measure model forward pass, NMS, device transfer, or end-to-end runtime latency.
 
 ```bash
 dtflowcv benchmark-yolo \
@@ -125,3 +166,5 @@ cargo test --manifest-path native/dtflowcv_native/Cargo.toml
 ```
 
 CI separates core, visualization/video, heavy optional blocked behavior, native, and docs hygiene. Real model quality still requires a fixed dataset split, generated predictions, and an accepted benchmark report.
+
+The scheduled/manual `.github/workflows/heavy-runtime.yml` workflow installs heavy runtime extras and smokes real `infer-images`, `benchmark-inference`, and ONNX export with `yolov8n.pt`. That workflow proves runtime viability only; it does not prove model quality.

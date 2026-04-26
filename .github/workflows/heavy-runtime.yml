@@ -1,0 +1,51 @@
+name: heavy-runtime
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * 0"
+
+jobs:
+  heavy-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install runtime extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,train,export,viz,video]" \
+            -c constraints-dev.txt \
+            -c constraints-train-cpu.txt \
+            -c constraints-benchmark.txt
+      - name: Build smoke dataset
+        run: python -m dtflowcv make-demo-dataset --out /tmp/dtflowcv-demo --images 2
+      - name: Real image inference smoke
+        run: |
+          python -m dtflowcv infer-images \
+            --images /tmp/dtflowcv-demo/images \
+            --problem configs/problem.yaml \
+            --model yolov8n.pt \
+            --out /tmp/dtflowcv-annotated \
+            --max-images 2
+      - name: Real inference benchmark smoke
+        run: |
+          python -m dtflowcv benchmark-inference \
+            --images /tmp/dtflowcv-demo/images \
+            --problem configs/problem.yaml \
+            --model yolov8n.pt \
+            --device cpu \
+            --warmup 0 \
+            --runs 1 \
+            --max-images 2 \
+            --out /tmp/dtflowcv-inference-benchmark.json
+      - name: Real ONNX export smoke
+        run: |
+          python -m dtflowcv export-model \
+            --model yolov8n.pt \
+            --out /tmp/yolov8n.onnx \
+            --format onnx \
+            --input-size 320

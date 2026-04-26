@@ -7,8 +7,10 @@ OPTIONAL_DEPENDENCIES: dict[str, tuple[str, str]] = {
     "cv2": ("opencv-python", "python -m pip install -e '.[viz,video]'"),
     "matplotlib": ("matplotlib", "python -m pip install -e '.[viz]'"),
     "mlflow": ("mlflow", "python -m pip install -e '.[train]'"),
+    "maturin": ("maturin", "python -m pip install -e '.[native]'"),
     "onnx": ("onnx", "python -m pip install -e '.[export]'"),
     "onnxruntime": ("onnxruntime", "python -m pip install -e '.[deploy]'"),
+    "pandas": ("pandas", "python -m pip install -e '.[analysis]'"),
     "torch": ("torch", "python -m pip install -e '.[train]'"),
     "ultralytics": ("ultralytics", "python -m pip install -e '.[train]'"),
 }

@@ -1,4 +1,11 @@
-from dtflowcv.metrics import DetectionPrediction, DetectionTarget, box_iou, confusion_matrix, map_at_iou
+from dtflowcv.metrics import (
+    DetectionPrediction,
+    DetectionTarget,
+    box_iou,
+    coco_style_metrics,
+    confusion_matrix,
+    map_at_iou,
+)
 
 
 def test_box_iou() -> None:
@@ -31,3 +38,13 @@ def test_confusion_matrix_uses_unknown_bucket_for_out_of_schema_prediction() -> 
     assert result["size"] == 3
     assert result["unknown_index"] == 2
     assert result["matrix"][0][2] == 1
+
+
+def test_coco_style_metrics_are_perfect_for_perfect_predictions() -> None:
+    targets = [DetectionTarget("a", 0, (0, 0, 100, 100))]
+    predictions = [DetectionPrediction("a", 0, (0, 0, 100, 100), 0.99)]
+    result = coco_style_metrics(targets, predictions, class_count=1)
+    assert result["ap50_95"] == 1.0
+    assert result["ap50"] == 1.0
+    assert result["ap75"] == 1.0
+    assert result["ar_1"] == 1.0

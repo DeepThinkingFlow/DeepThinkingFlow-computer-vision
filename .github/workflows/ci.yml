@@ -107,6 +107,34 @@ jobs:
       - name: Native Rust/C build contract
         run: cargo test --manifest-path native/dtflowcv_native/Cargo.toml
 
+  license-vendor-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: python -m pip install -e ".[dev]" -c constraints-dev.txt
+      - name: License and vendor scan
+        run: |
+          mkdir -p reports
+          pip-licenses --format=json --output-file=reports/licenses.json
+          python -m dtflowcv license-check
+          python -m dtflowcv vendor-check
+          python -m dtflowcv dependency-check
+      - name: Vendor tests
+        run: python -m pytest tests/vendor -q
+
+  model-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No tracked model artifacts
+        run: |
+          tracked="$(git ls-files '*.pt' '*.pth' '*.onnx' '*.engine' '*.safetensors' '*.torchscript')"
+          test -z "$tracked"
+
   docs:
     runs-on: ubuntu-latest
     steps:

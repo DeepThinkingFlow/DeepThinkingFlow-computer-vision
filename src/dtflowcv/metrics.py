@@ -21,6 +21,14 @@ class DetectionPrediction:
     score: float
 
 
+COCO_IOU_THRESHOLDS = tuple(round(float(value), 2) for value in np.arange(0.50, 0.96, 0.05))
+COCO_AREA_RANGES = {
+    "small": (0.0, 32.0 * 32.0),
+    "medium": (32.0 * 32.0, 96.0 * 96.0),
+    "large": (96.0 * 96.0, float("inf")),
+}
+
+
 def box_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
@@ -186,6 +194,78 @@ def map_at_iou(
         "invalid_target_class_id_count": len(invalid_targets),
         "unknown_prediction_fp": len(unknown_predictions),
     }
+
+
+def coco_style_metrics(
+    targets: list[DetectionTarget],
+    predictions: list[DetectionPrediction],
+    class_count: int,
+    iou_thresholds: tuple[float, ...] = COCO_IOU_THRESHOLDS,
+) -> dict[str, object]:
+    """Compute COCO-style AP/AR without requiring pycocotools.
+
+    This is an internal deterministic evaluator over this repo's DetectionTarget/
+    DetectionPrediction contract. It is not a pycocotools parity claim.
+    """
+    ap_by_iou: dict[str, float] = {}
+    for threshold in iou_thresholds:
+        metric = map_at_iou(targets, predictions, class_count, threshold)
+        ap_by_iou[f"{threshold:.2f}"] = float(metric["map"])
+
+    ap_values = list(ap_by_iou.values())
+    area_ap: dict[str, float | None] = {}
+    for name, area_range in COCO_AREA_RANGES.items():
+        area_targets = [target for target in targets if _box_area_in_range(target.box_xyxy, area_range)]
+        if not area_targets:
+            area_ap[name] = None
+            continue
+        area_predictions = [
+            prediction for prediction in predictions if _box_area_in_range(prediction.box_xyxy, area_range)
+        ]
+        area_scores = [
+            float(map_at_iou(area_targets, area_predictions, class_count, threshold)["map"])
+            for threshold in iou_thresholds
+        ]
+        area_ap[name] = float(np.mean(area_scores)) if area_scores else None
+
+    return {
+        "ap50_95": float(np.mean(ap_values)) if ap_values else 0.0,
+        "ap50": ap_by_iou.get("0.50", 0.0),
+        "ap75": ap_by_iou.get("0.75", 0.0),
+        "ap_by_iou": ap_by_iou,
+        "ap_small": area_ap["small"],
+        "ap_medium": area_ap["medium"],
+        "ap_large": area_ap["large"],
+        "ar_1": average_recall(targets, predictions, class_count, iou_thresholds, max_detections=1),
+        "ar_10": average_recall(targets, predictions, class_count, iou_thresholds, max_detections=10),
+        "ar_100": average_recall(targets, predictions, class_count, iou_thresholds, max_detections=100),
+        "iou_thresholds": list(iou_thresholds),
+        "claim_boundary": "COCO-style internal metrics; pycocotools parity is not claimed unless separately verified.",
+    }
+
+
+def average_recall(
+    targets: list[DetectionTarget],
+    predictions: list[DetectionPrediction],
+    class_count: int,
+    iou_thresholds: tuple[float, ...] = COCO_IOU_THRESHOLDS,
+    max_detections: int = 100,
+) -> float:
+    recalls: list[float] = []
+    valid_targets = [target for target in targets if _is_valid_class_id(target.class_id, class_count)]
+    valid_predictions = [
+        prediction for prediction in predictions if _is_valid_class_id(prediction.class_id, class_count)
+    ]
+    for threshold in iou_thresholds:
+        matched_count = 0
+        for class_id in range(class_count):
+            class_targets = [target for target in valid_targets if target.class_id == class_id]
+            if not class_targets:
+                continue
+            class_predictions = [pred for pred in valid_predictions if pred.class_id == class_id]
+            matched_count += _matched_target_count(class_targets, class_predictions, threshold, max_detections)
+        recalls.append(matched_count / max(len(valid_targets), 1))
+    return float(np.mean(recalls)) if recalls else 0.0
 
 
 def confusion_matrix(
@@ -354,6 +434,51 @@ def _average_precision_np(tp: np.ndarray, fp: np.ndarray, target_count: int) -> 
 
     ap = float(np.sum((mrec[indices] - mrec[indices - 1]) * mpre[indices]))
     return ap
+
+
+def _matched_target_count(
+    targets: list[DetectionTarget],
+    predictions: list[DetectionPrediction],
+    iou_threshold: float,
+    max_detections: int,
+) -> int:
+    targets_by_image: dict[str, list[tuple[int, DetectionTarget]]] = defaultdict(list)
+    predictions_by_image: dict[str, list[DetectionPrediction]] = defaultdict(list)
+    for idx, target in enumerate(targets):
+        targets_by_image[target.image_id].append((idx, target))
+    for prediction in predictions:
+        predictions_by_image[prediction.image_id].append(prediction)
+
+    matched: set[int] = set()
+    for image_id, image_targets in targets_by_image.items():
+        image_predictions = sorted(
+            predictions_by_image.get(image_id, []),
+            key=lambda item: item.score,
+            reverse=True,
+        )[:max_detections]
+        for prediction in image_predictions:
+            best_index = -1
+            best_iou = 0.0
+            for index, target in image_targets:
+                if index in matched:
+                    continue
+                iou_value = box_iou(target.box_xyxy, prediction.box_xyxy)
+                if iou_value > best_iou:
+                    best_iou = iou_value
+                    best_index = index
+            if best_iou >= iou_threshold and best_index >= 0:
+                matched.add(best_index)
+    return len(matched)
+
+
+def _box_area_in_range(
+    box_xyxy: tuple[float, float, float, float],
+    area_range: tuple[float, float],
+) -> bool:
+    x1, y1, x2, y2 = box_xyxy
+    area = max(x2 - x1, 0.0) * max(y2 - y1, 0.0)
+    low, high = area_range
+    return low <= area < high
 
 
 def _is_valid_class_id(class_id: int, class_count: int) -> bool:

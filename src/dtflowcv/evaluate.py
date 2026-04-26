@@ -8,6 +8,7 @@ from PIL import Image
 from dtflowcv.metrics import (
     DetectionPrediction,
     DetectionTarget,
+    coco_style_metrics,
     confusion_matrix,
     map_at_iou,
     precision_recall_curve,
@@ -92,6 +93,13 @@ def evaluate_yolo_predictions(
     result["invalid_prediction_class_ids"] = invalid_prediction_class_ids
     result["invalid_target_class_id_count"] = len(invalid_target_class_ids)
     result["invalid_prediction_class_id_count"] = len(invalid_prediction_class_ids)
+    coco_metrics = coco_style_metrics(targets, predictions, class_count)
+    result["coco_metrics"] = coco_metrics
+    result["map50_95"] = coco_metrics["ap50_95"]
+    result["map75"] = coco_metrics["ap75"]
+    result["ap_small"] = coco_metrics["ap_small"]
+    result["ap_medium"] = coco_metrics["ap_medium"]
+    result["ap_large"] = coco_metrics["ap_large"]
 
     # Confusion matrix
     cm = confusion_matrix(targets, predictions, class_count, iou_threshold)
